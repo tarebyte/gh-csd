@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    # macOS: gh csd only runs there, so build and compare on the real target.
+    runs-on: macos-latest
+    env:
+      SPINEL_VERSION: 2026.10.25
+      SPINEL: ${{ github.workspace }}/../spinel/spinel
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # CRuby runs the unit tests and is spinel diff's reference.
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        with:
+          ruby-version: "4.0"
+
+      - id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/../spinel
+          key: spinel-${{ runner.os }}-${{ runner.arch }}-${{ env.SPINEL_VERSION }}
+
+      - name: Build Spinel
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          git clone -q --depth 1 --branch "$SPINEL_VERSION" https://github.com/matz/spinel ../spinel
+          make -C ../spinel deps
+          make -C ../spinel -j"$(sysctl -n hw.ncpu)"
+
+      # Tests, spinel diff, the untyped-slot ratchet, and the build.
+      - run: make check SPINEL="$SPINEL"
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+
+      - if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gh-csd
+          path: gh-csd
+
+  # gh extension install picks the gh-<name>-<os>-<arch> asset.
+  release:
+    needs: check
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: gh-csd
+      - run: |
+          mv gh-csd gh-csd-darwin-arm64
+          gh release create "$GITHUB_REF_NAME" gh-csd-darwin-arm64 -R "$GITHUB_REPOSITORY" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
