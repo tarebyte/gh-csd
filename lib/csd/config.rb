@@ -10,6 +10,29 @@ module Csd
   #
   # gh csd only reads the file; a missing file means built-in defaults.
   class Config
+    # What gh csd init writes: every setting, commented out.
+    TEMPLATE = <<~YAML
+      # gh csd config. Environment variables override these settings.
+      # Uncomment what you need. Top-level keys apply to every repo; a repo's
+      # section under repos: wins over them.
+
+      # up requires machine. To list a repo's machine types, run:
+      #   gh api repos/<owner/name>/codespaces/machines --jq '.machines[].name'
+      # machine: standardLinux32gb
+      # devcontainer: .devcontainer/devcontainer.json
+      # default_permissions: false
+      # dir: /workspaces/<repo name>
+      # branch: main
+      # A command that succeeds once the codespace's services accept
+      # connections; up retries it for up to 5 minutes.
+      # ready_check: none
+
+      # repos:
+      #   <owner/name>:
+      #     machine: standardLinux32gb
+      #     ready_check: nc -z localhost 5432
+    YAML
+
     # owner/name from a github.com origin URL (SSH or HTTPS), or "".
     #: (String) -> String
     def self.repo_from(url)

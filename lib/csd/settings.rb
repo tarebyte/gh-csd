@@ -64,9 +64,14 @@ module Csd
     #: () -> String
     def machine
       machine = value("machine")
-      raise Error, "set machine in #{Config.path(@env)}, or CS_MACHINE" if machine.empty?
+      raise Error, "set machine in #{config_path}, or CS_MACHINE" if machine.empty?
 
       machine
+    end
+
+    #: () -> String
+    def config_path
+      Config.path(@env)
     end
 
     #: () -> String

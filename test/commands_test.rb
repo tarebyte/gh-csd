@@ -33,7 +33,7 @@ class CommandsTest < Minitest::Test
   def test_up_creates_the_worktree_and_codespace_then_waits_and_syncs
     @fake.on("gh", "codespace", "create", out: "cs-new\n")
          .on("gh", "codespace", "ssh", "--config", out: CONFIG)
-         .on_ssh("test -f ~/.local/state/dotfiles/setup-ready", status: 1)
+         .on_ssh("test -f ~/.local/state/gh-csd/setup-ready", status: 1)
 
     out, err = capture_io { commands.up("me/feature") }
 
@@ -140,6 +140,28 @@ class CommandsTest < Minitest::Test
     cmd = @fake.calls_matching("gh", "codespace", "create").first
     assert_includes cmd, "big-machine"
     assert_includes cmd, "--default-permissions"
+  end
+
+  # --- init ---
+
+  def test_init_writes_a_template_that_parses_to_no_settings
+    @fake.passthrough("mkdir")
+    path = "#{@root}/config/gh-csd/config.yml"
+
+    _, err = capture_io { commands("GH_CSD_CONFIG" => path).init }
+
+    assert_includes err, "wrote #{path}"
+    assert_equal Csd::Config::TEMPLATE, File.read(path)
+    assert_equal({}, Csd::Config.parse(File.read(path), path, "me/my-app"))
+  end
+
+  def test_init_never_replaces_an_existing_config
+    path = "#{@root}/config.yml"
+    File.write(path, "machine: mine\n")
+
+    error = assert_raises(Csd::Error) { commands("GH_CSD_CONFIG" => path).init }
+    assert_match "already exists", error.message
+    assert_equal "machine: mine\n", File.read(path)
   end
 
   # --- run ---
@@ -264,7 +286,7 @@ class CommandsTest < Minitest::Test
 
   def test_watch_notifies_once_dotfiles_are_done_and_clears_the_status
     @fake.on("gh", "codespace", "ssh", "--config", out: CONFIG)
-         .on_ssh("test -f ~/.local/state/dotfiles/setup-complete", status: 1)
+         .on_ssh("test -f ~/.local/state/gh-csd/setup-complete", status: 1)
     File.write("#{@root}/status", "dotfiles…\n")
 
     commands.watch("cs1", "", "#{@root}/status")

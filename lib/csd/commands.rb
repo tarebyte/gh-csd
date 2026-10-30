@@ -1,7 +1,7 @@
 module Csd
   class Commands
-    READY = "~/.local/state/dotfiles/setup-ready"
-    DONE = "~/.local/state/dotfiles/setup-complete"
+    READY = "~/.local/state/gh-csd/setup-ready"
+    DONE = "~/.local/state/gh-csd/setup-complete"
 
     #: (Runner, Waiter, Settings) -> void
     def initialize(runner, waiter, settings)
@@ -35,6 +35,17 @@ module Csd
       delete_codespace(tree.codespace)
       tree.remove(force: force)
       log "removed worktree=#{tree.path} branch=#{branch}"
+    end
+
+    # Writes the commented template config; never replaces an existing file.
+    #: () -> void
+    def init
+      path = @settings.config_path
+      raise Error, "#{path} already exists" if File.exist?(path)
+
+      @runner.capture(["mkdir", "-p", File.dirname(path)])
+      File.write(path, Config::TEMPLATE)
+      log "wrote #{path}"
     end
 
     # Hidden: up starts it in the background to notify once the dotfiles

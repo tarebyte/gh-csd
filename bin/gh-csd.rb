@@ -8,6 +8,7 @@ USAGE = <<~TEXT
     up <branch>             create or reuse a worktree and its Codespace
     run [command...]        sync the worktree's changes, then run command in the Codespace
     down [--force] <branch> delete the Codespace, worktree, and branch
+    init                    write a commented config file to fill in
 
   Config: ~/.config/gh-csd/config.yml ($XDG_CONFIG_HOME/gh-csd/config.yml, or
   $GH_CSD_CONFIG). Keys, at the top level or under repos: <owner/name>:
@@ -43,6 +44,9 @@ begin
     force = args.delete("--force") ? true : false
     usage_error unless args.size == 1
     commands.down(args[0], force: force)
+  when "init"
+    usage_error unless args.empty?
+    commands.init
   when "__watch"
     commands.watch(args[0], args[1].to_s, args[2].to_s)
   when nil, "help", "-h", "--help"

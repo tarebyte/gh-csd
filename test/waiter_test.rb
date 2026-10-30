@@ -43,8 +43,8 @@ class RemoteFileTest < Minitest::Test
   def test_true_when_the_file_exists
     @fake.on("gh", "codespace", "ssh", "--config", out: CONFIG)
 
-    assert @remote.file?("~/.local/state/dotfiles/setup-ready")
-    assert_equal "test -f ~/.local/state/dotfiles/setup-ready", @fake.calls_matching("ssh").last.last
+    assert @remote.file?("~/.local/state/gh-csd/setup-ready")
+    assert_equal "test -f ~/.local/state/gh-csd/setup-ready", @fake.calls_matching("ssh").last.last
   end
 
   def test_false_when_ssh_fails
