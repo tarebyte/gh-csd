@@ -1,6 +1,9 @@
 {
   "name": "gh-csd",
-  "description": "Skill for gh csd: edit github/github in a local worktree and run it in that worktree's own Codespace.",
-  "author": { "name": "Mark Tareshawty" },
-  "repository": "https://github.com/tarebyte/gh-csd"
+  "description": "Skill for gh csd: edit a GitHub repo in a local worktree and run it in that worktree's own Codespace.",
+  "author": {
+    "name": "Mark Tareshawty"
+  },
+  "repository": "https://github.com/tarebyte/gh-csd",
+  "license": "ISC"
 }

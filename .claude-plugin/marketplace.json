@@ -8,7 +8,7 @@
     {
       "name": "gh-csd",
       "source": "./",
-      "description": "Skill for gh csd: edit github/github in a local worktree and run it in that worktree's own Codespace."
+      "description": "Skill for gh csd: edit a GitHub repo in a local worktree and run it in that worktree's own Codespace."
     }
   ]
 }
