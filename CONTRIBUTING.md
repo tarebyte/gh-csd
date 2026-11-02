@@ -5,7 +5,10 @@ gh csd is Ruby compiled to a native binary with [Spinel](https://github.com/matz
 ```sh
 make test    # unit tests on CRuby
 make check   # tests, spinel diff, type check, and build
+make doctor  # Spinel's health report, for debugging
 ```
+
+If the compiled binary behaves differently from CRuby, run `make doctor`. It reports calls that Spinel cannot compile or silently turns into `nil`. Findings inside Spinel's bundled packages (such as `psych` and `shellwords`) are expected.
 
 Run `make check` before you open a pull request. CI runs the same target, and pull requests need it to pass.
 

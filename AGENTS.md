@@ -15,6 +15,7 @@ gh csd is a `gh` extension that pairs a local git worktree with its own GitHub C
 
 - `make check`: run before finishing any change. It runs the tests, `spinel diff`, the type check, and the build.
 - `make test`: the unit tests on CRuby only.
+- `make doctor`: Spinel's health report. Run it when the binary behaves differently from CRuby. Findings inside Spinel's bundled packages are expected.
 - Spinel must be at `~/src/matz/spinel/spinel`, or pass `SPINEL=<path>`. CI pins the version in `.github/workflows/ci.yml`.
 
 ## Spinel rules

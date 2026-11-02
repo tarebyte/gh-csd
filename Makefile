@@ -1,6 +1,6 @@
 SPINEL ?= $(HOME)/src/matz/spinel/spinel
 
-.PHONY: build test spinel-check types check clean
+.PHONY: build test spinel-check types check doctor clean
 
 # The extension binary: gh runs ./gh-csd for `gh csd`.
 build:
@@ -23,6 +23,12 @@ types:
 	echo "types: every parameter and return is typed"
 
 check: test spinel-check types build
+
+# Spinel's own health report: unsupported or silently degraded calls, untyped
+# slots, and output vs CRuby. For debugging; findings inside Spinel's bundled
+# packages are expected, so make ignores its exit status.
+doctor:
+	-SPINEL=$(SPINEL) ruby $(dir $(SPINEL))tools/doctor.rb bin/gh-csd.rb
 
 clean:
 	rm -f gh-csd spinel/smoke spinel/types-check
