@@ -15,7 +15,7 @@ jobs:
     runs-on: macos-latest
     env:
       SPINEL_VERSION: 2026.10.25
-      SPINEL: ${{ github.workspace }}/../spinel/spinel
+      SPINEL: ${{ github.workspace }}/.spinel/spinel
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -27,15 +27,16 @@ jobs:
       - id: cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ github.workspace }}/../spinel
+          # Inside the workspace: actions/cache rejects paths with "..".
+          path: ${{ github.workspace }}/.spinel
           key: spinel-${{ runner.os }}-${{ runner.arch }}-${{ env.SPINEL_VERSION }}
 
       - name: Build Spinel
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          git clone -q --depth 1 --branch "$SPINEL_VERSION" https://github.com/matz/spinel ../spinel
-          make -C ../spinel deps
-          make -C ../spinel -j"$(sysctl -n hw.ncpu)"
+          git clone -q --depth 1 --branch "$SPINEL_VERSION" https://github.com/matz/spinel .spinel
+          make -C .spinel deps
+          make -C .spinel -j"$(sysctl -n hw.ncpu)"
 
       # Tests, spinel diff, the untyped-slot ratchet, and the build.
       - run: make check SPINEL="$SPINEL"
