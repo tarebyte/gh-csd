@@ -14,7 +14,6 @@ Each worktree has its own codespace, so you can work on several branches at once
 - `gh`, logged in with the `codespace` scope: `gh auth refresh -s codespace`.
 - `rsync` and `ssh`.
 - A local clone of the repo, with its `origin` remote on github.com.
-- Read access to tarebyte/gh-csd.
 
 ## Get started
 
