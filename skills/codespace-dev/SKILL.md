@@ -27,8 +27,8 @@ gh csd up <branch>
 - `up` fails with `set machine in ...` when no `machine` is set. Ask the user which machine type to use. `gh api repos/<owner/name>/codespaces/machines --jq '.machines[].name'` lists them.
 - If the devcontainer asks for extra repository permissions, `up` opens the approval page in the browser and waits up to 10 minutes. Tell the user to approve it there.
 - `up` waits for the dotfiles' `setup-ready` marker (up to 20 minutes), then runs `ready_check` until it succeeds (up to 5 minutes), when it is set.
-- For a new codespace, `up` leaves a background watcher that notifies the user (through iTerm2 when `up` ran in iTerm2) once the dotfiles write `setup-complete`, up to 30 minutes later.
-- After `up` prints `ready`, move this session into the worktree without asking (in Claude Code, `EnterWorktree` with `path: <worktree>`; elsewhere, run every command from the worktree). Do not edit or run commands in the main checkout; the user keeps it untouched.
+- For a new codespace, `up` leaves a background watcher that sends the user a desktop notification once the dotfiles write `setup-complete`, up to 30 minutes later.
+- After `up` prints `ready`, switch this session into the worktree without asking, if your agent can; otherwise run every command from the worktree. Do not edit or run commands in the main checkout; the user keeps it untouched.
 
 ## Run a command
 

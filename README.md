@@ -86,24 +86,13 @@ If the devcontainer asks for extra repository permissions, the first `up` opens 
 
 ## Use it from an agent
 
-This repo is also a plugin for Claude Code and GitHub Copilot CLI. Its [`codespace-dev`](skills/codespace-dev/SKILL.md) skill teaches the agent to use gh csd: start an environment, run tests in it, and tear it down.
-
-Claude Code:
+The [`codespace-dev`](skills/codespace-dev/SKILL.md) skill teaches your agent to use gh csd: start an environment, run tests in it, and tear it down. Install it with `gh skill`, which supports Claude Code, GitHub Copilot, Cursor, Codex, and many other agents:
 
 ```sh
-claude plugin marketplace add tarebyte/gh-csd
-claude plugin install gh-csd@gh-csd
+gh skill install tarebyte/gh-csd codespace-dev --scope user
 ```
 
-Update with `claude plugin marketplace update gh-csd`.
-
-GitHub Copilot CLI:
-
-```sh
-copilot plugin install tarebyte/gh-csd
-```
-
-Update by running the same command again.
+`gh skill` asks which agent to install it for. Update it later with `gh skill update`.
 
 Then ask the agent in plain words. For example:
 
@@ -113,7 +102,7 @@ Then ask the agent in plain words. For example:
 - "The test failed in the codespace. Fix it and run it again."
 - "Tear down the codespace for `me/fix-login`."
 
-In Claude Code, you can also start the skill directly with `/gh-csd:codespace-dev`.
+To install it as a Claude Code or Copilot CLI plugin instead, see [docs/plugins.md](docs/plugins.md).
 
 ## Configuration
 

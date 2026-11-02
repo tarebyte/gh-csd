@@ -2,7 +2,7 @@ module Csd
   # A local worktree of the main checkout, one per branch, and the codespace
   # it is bound to.
   class Worktree
-    # Read by the Claude Code status line in the dotfiles; keep the name.
+    # Read by a status line in the user's dotfiles; keep the name.
     BINDING = "cs-dev-codespace"
     # What gh csd is doing with the codespace, also for the status line.
     STATUS = "cs-dev-status"
