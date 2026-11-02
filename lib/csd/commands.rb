@@ -49,7 +49,7 @@ module Csd
     end
 
     # Hidden: up starts it in the background to notify once the dotfiles
-    # (Neovim, tree-sitter, plugins) finish, then clear the worktree's status.
+    # finish (setup-complete), then clear the worktree's status.
     # tty is up's iTerm2 tty, or "".
     #: (String, String, String) -> void
     def watch(name, tty, status_path)

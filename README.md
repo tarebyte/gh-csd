@@ -80,5 +80,3 @@ Then ask the agent in plain words. For example:
 - "Sync my changes and run the linter in the codespace."
 - "The test failed in the codespace. Fix it and run it again."
 - "Tear down the codespace for `me/fix-login`."
-
-To install it as a Claude Code or Copilot CLI plugin instead, see [docs/plugins.md](docs/plugins.md).
