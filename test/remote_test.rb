@@ -30,6 +30,19 @@ class RemoteTest < Minitest::Test
     refute File.exist?(File.join(@tmpdir, "gh-csd-fake-cs.ssh"))
   end
 
+  def test_a_still_starting_codespace_is_not_ready_yet
+    @fake.on("gh", "codespace", "ssh", "--config", err: "codespace is starting\n", status: 1)
+
+    refute @remote.file?("~/ready")
+  end
+
+  def test_a_codespace_without_an_ssh_server_raises_instead_of_waiting
+    @fake.on("gh", "codespace", "ssh", "--config", err: "error getting ssh server details: failed to start SSH server: \n", status: 1)
+
+    error = assert_raises(Csd::NoSshServer) { @remote.file?("~/ready") }
+    assert_match "features/sshd", error.message
+  end
+
   # Regression: without IdentityAgent=none, every new connection waited
   # about 60s on the 1Password agent.
   def test_every_ssh_call_skips_the_agent_and_shares_a_connection

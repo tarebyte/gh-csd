@@ -2,6 +2,8 @@ require "shellwords"
 
 module Csd
   class Error < StandardError; end
+  # Retrying never helps: the devcontainer has to install sshd.
+  class NoSshServer < Error; end
 
   # Talks to a codespace over plain ssh and rsync, using the config that
   # `gh codespace ssh --config` prints.
@@ -55,10 +57,13 @@ module Csd
     end
 
     # A codespace that is still starting fails SSH, or even the config
-    # fetch; both count as "not yet", so wait loops keep polling.
+    # fetch; both count as "not yet", so wait loops keep polling. One with
+    # no SSH server never gets there, so that raises.
     #: (String) -> bool
     def file?(path)
       capture("test -f #{path}").success?
+    rescue NoSshServer
+      raise
     rescue Error
       false
     end
@@ -101,6 +106,9 @@ module Csd
     #: () -> void
     def fetch_config
       result = @runner.capture(["gh", "codespace", "ssh", "--config", "-c", @codespace])
+      if result.err.include?("failed to start SSH server")
+        raise NoSshServer, "#{@codespace} has no SSH server: add \"ghcr.io/devcontainers/features/sshd:1\": {} to the devcontainer's features, then rebuild it"
+      end
       raise Error, "gh codespace ssh --config failed: #{result.err.strip}" unless result.success? && !result.out.empty?
 
       File.write(@cached_config, result.out)
