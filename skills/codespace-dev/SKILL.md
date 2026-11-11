@@ -20,7 +20,7 @@ gh csd works on the repo of the current checkout. It reads the repo name and the
 gh csd up <branch>
 ```
 
-- Creates or reuses the worktree `<main-checkout>-<branch>` (slashes become `-`), branched from origin's default branch (the `branch` setting).
+- Reuses the branch's existing worktree, wherever it is. Otherwise creates `<main-checkout>-<branch>` (slashes become `-`), branched from origin's default branch (the `branch` setting).
 - Creates or reuses the worktree's codespace on that branch, then does a first sync.
 - Prints `gh csd: ready  worktree=<path>  codespace=<name>`. Tell the user both values.
 - A new codespace takes several minutes. Run `up` in the background and wait for it to finish.

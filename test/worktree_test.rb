@@ -28,6 +28,23 @@ class WorktreeTest < Minitest::Test
     assert_equal "#{@root}/my-app-me-two", Csd::Worktree.for_branch(@runner, "me/two", first.path, "master").path
   end
 
+  def test_reuses_a_worktree_another_tool_made_for_the_branch
+    elsewhere = "#{@root}/elsewhere/my-app/me-feature"
+    sh("git", "-C", @main, "worktree", "add", "-q", "-b", "me/feature", elsewhere, "origin/master")
+    tree = Csd::Worktree.for_branch(@runner, "me/feature", @main, "master")
+
+    assert_equal elsewhere, tree.path
+    refute tree.create
+    tree.remove
+    refute Dir.exist?(elsewhere)
+  end
+
+  def test_never_picks_the_main_checkout
+    tree = Csd::Worktree.for_branch(@runner, "master", @main, "master")
+
+    assert_equal "#{@root}/my-app-master", tree.path
+  end
+
   def test_create_branches_from_origin_master_and_reuses_an_existing_tree
     tree = Csd::Worktree.for_branch(@runner, "me/feature", @main, "master")
 

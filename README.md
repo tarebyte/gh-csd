@@ -2,7 +2,7 @@
 
 Edit a GitHub repo in a local worktree, and run it in that worktree's own codespace.
 
-- `gh csd up <branch>` makes a worktree next to your main checkout (`~/src/my-app` → `~/src/my-app-<branch>`) and a codespace for it.
+- `gh csd up <branch>` makes a worktree next to your main checkout (`~/src/my-app` → `~/src/my-app-<branch>`) and a codespace for it. If the branch already has a worktree somewhere else, for example one that another tool made, `up` uses that worktree.
 - `gh csd run <command>` copies the worktree's changes to the codespace with rsync, then runs the command there over SSH.
 - `gh csd down <branch>` deletes the codespace, the worktree, and the branch.
 

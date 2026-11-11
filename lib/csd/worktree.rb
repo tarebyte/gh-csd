@@ -10,14 +10,30 @@ module Csd
     attr_reader :path #: String
     attr_reader :branch, :main #: String?
 
-    # The worktree for branch: next to the main checkout, with slashes in
+    # The worktree for branch: the one git already has for it, wherever
+    # another tool made it; else next to the main checkout, with slashes in
     # the branch name turned into dashes (my-app -> my-app-me-feature).
     # base is the branch on origin that new worktrees start from.
     #: (Runner, String, String, String) -> Worktree
     def self.for_branch(runner, branch, cwd, base)
       common = git(runner, cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"])
       main = common.sub(%r{/\.git\z}, "")
-      new(runner, "#{main}-#{branch.tr("/", "-")}", base, branch, main)
+      path = existing_path(runner, main, branch)
+      path = "#{main}-#{branch.tr("/", "-")}" if path.empty?
+      new(runner, path, base, branch, main)
+    end
+
+    # The path of branch's linked worktree, or "" when it has none. Never
+    # the main checkout: down would try to remove it.
+    #: (Runner, String, String) -> String
+    def self.existing_path(runner, main, branch)
+      found = ""
+      git(runner, main, ["worktree", "list", "--porcelain"]).split("\n\n").each do |entry|
+        lines = entry.split("\n")
+        path = lines[0].to_s.sub(/\Aworktree /, "")
+        found = path if path != main && lines.include?("branch refs/heads/#{branch}")
+      end
+      found
     end
 
     #: (Runner, String, String) -> Worktree
