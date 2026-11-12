@@ -1,29 +1,24 @@
 # AGENTS.md
 
-gh csd is a `gh` extension that pairs a local git worktree with its own GitHub Codespace. It is written in Ruby and compiled to a native macOS binary with [Spinel](https://github.com/matz/spinel). The README covers usage; this file covers working on the code.
+gh csd is a `gh` extension that pairs a local git worktree with its own GitHub Codespace. It is written in Go on [go-gh](https://github.com/cli/go-gh), gh's own library for extensions. The README covers usage; this file covers working on the code.
 
 ## Layout
 
-- `bin/gh-csd.rb`: dispatch only. Keep logic in `lib/`.
-- `lib/csd/cli.rb`: argument parsing, flags, and each command's `--help` text.
-- `lib/csd/commands.rb`: the `up`, `run`, `status`, `down`, and `init` commands. `prompt.rb` asks in a terminal.
-- `lib/csd/settings.rb`, `config.rb`: settings from flags, the config file, and the origin remote.
-- `lib/csd/worktree.rb`, `sync.rb`, `change_set.rb`: the local side and the rsync of changes.
-- `lib/csd/codespace.rb`, `remote.rb`: `gh codespace` calls, and ssh/rsync to the codespace.
-- `lib/csd/runner.rb`: every external command goes through `Runner`.
+- `main.go`: cobra commands, flags, `--help` text, exit codes, and the wiring of the real terminal, prompter, and browser. Keep logic in `internal/csd`.
+- `internal/csd/commands.go`: the `up`, `run`, `status`, `down`, and `init` commands.
+- `internal/csd/settings.go`, `config.go`: settings from flags, the config file, and the origin remote.
+- `internal/csd/worktree.go`, `sync.go`, `changeset.go`: the local side and the rsync of changes.
+- `internal/csd/codespace.go`, `remote.go`: `gh codespace` calls, waiting, and ssh/rsync to the codespace.
+- `internal/csd/runner.go`: every external command goes through `Runner`.
 
 ## Commands
 
-- `make check`: run before finishing any change. It runs the tests, `spinel diff`, the type check, and the build.
-- `make test`: the unit tests on CRuby only.
-- `make doctor`: Spinel's health report. Run it when the binary behaves differently from CRuby. Findings inside Spinel's bundled packages are expected.
-- Spinel must be at `~/src/matz/spinel/spinel`, or pass `SPINEL=<path>`. CI pins the version in `.github/workflows/ci.yml`.
+- `make check`: run before finishing any change. It checks `gofmt`, then runs `go vet`, the tests, and the build. CI runs it on macOS and Linux.
+- `make test`: the tests only.
 
-## Spinel rules
+## Use go-gh
 
-- Give every method an inline RBS signature comment (`#: (String) -> bool`). `make types` fails on any untyped parameter or return.
-- Spinel cannot type top-level methods, so `bin/gh-csd.rb` must not define helpers. Put them in a `lib/` class.
-- Minitest runs only on CRuby. `spinel/smoke.rb` exercises the library under Spinel, and `spinel diff` compares its output with CRuby's. Update it whenever a constructor or method signature changes.
+Reach for go-gh before writing your own: `pkg/jq` and `pkg/template` for `--jq` and `--template`, `pkg/jsonpretty` for JSON, `pkg/tableprinter` for tables, `pkg/prompter` for questions, `pkg/term` for TTY checks and width, and `pkg/browser` to open URLs. They behave as gh does.
 
 ## CLI design
 
@@ -31,18 +26,18 @@ Follow `gh`: flags named like `gh codespace` (`-m`, `-c`, `--devcontainer-path`)
 
 ## Code style
 
-- Match the surrounding code: small classes, short methods, and a one-line comment only for a why the code cannot show.
+- Match the surrounding code: small types, short functions, errors returned rather than logged, and a one-line comment only for a why the code cannot show.
 - Keep the code repo-neutral. No defaults, comments, or text that name a specific repo. Per-repo values belong in the user's `~/.config/gh-csd/config.yml`.
 
 ## Testing
 
-- Add or update tests in `test/` for every change.
-- Tests never run real `gh`, ssh, or rsync. Use `FakeRunner` (`test/support/fake_runner.rb`) and script its replies. Git runs for real in a throwaway repo (`test/support/git_repo.rb`).
-- `csd_settings` in `test/test_helper.rb` builds settings for the fake origin `me/my-app`; tests never read the real config file.
+- Add or update tests for every change, next to the code (`*_test.go`).
+- Tests never run real `gh`, ssh, or rsync. Use `fakeRunner` (`internal/csd/helpers_test.go`) and script its replies with `on` and `onSSH`. Git runs for real in a throwaway repo (`gitRepo`), and `fakeClock` makes waits instant.
+- `testSettings` builds settings for the fake origin `me/my-app`; tests never read the real config file.
 
 ## Security
 
-- Escape every value placed into a remote shell command with `Shellwords`, as `remote.rb` and `sync.rb` do.
+- Escape every value placed into a remote shell command with `ShellEscape` or `ShellJoin`, as `remote.go` and `sync.go` do.
 - Never pass the local `gh auth token` or other credentials into the codespace.
 - Only the `release` job in CI has write access, and it runs only on `v*` tags. Keep it that way.
 

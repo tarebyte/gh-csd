@@ -1,34 +1,17 @@
-SPINEL ?= $(HOME)/src/matz/spinel/spinel
+.PHONY: build test check clean
 
-.PHONY: build test spinel-check types check doctor clean
-
-# The extension binary: gh runs ./gh-csd for `gh csd`.
 build:
-	$(SPINEL) bin/gh-csd.rb -o gh-csd
+	go build -o gh-csd .
 
-# Unit tests run on CRuby, since Spinel cannot compile Minitest.
 test:
-	ruby -e 'Dir.glob("test/**/*_test.rb").sort.each { |f| require File.expand_path(f) }'
+	go test ./...
 
-# Proves the library still compiles under Spinel and behaves as on CRuby.
-spinel-check:
-	$(SPINEL) diff spinel/smoke.rb
-
-# Fails when Spinel cannot type one of gh-csd's own parameters or returns
-# and boxes it as untyped. Fix it with an inline RBS signature (#:).
-types:
-	@out=$$($(SPINEL) bin/gh-csd.rb -o spinel/types-check --warn-widen 2>&1 | grep 'warning:' | grep -v -e '/builtins/' -e '/packages/' | sed 's#^spinel: ##; s#^.*/gh-csd/##'); \
-	rm -f spinel/types-check; \
-	if [ -n "$$out" ]; then echo "$$out"; echo "$$(echo "$$out" | wc -l | tr -d ' ') untyped slots"; exit 1; fi; \
-	echo "types: every parameter and return is typed"
-
-check: test spinel-check types build
-
-# Spinel's own health report: unsupported or silently degraded calls, untyped
-# slots, and output vs CRuby. For debugging; findings inside Spinel's bundled
-# packages are expected, so make ignores its exit status.
-doctor:
-	-SPINEL=$(SPINEL) ruby $(dir $(SPINEL))tools/doctor.rb bin/gh-csd.rb
+# Run before finishing any change; CI runs the same.
+check:
+	test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
+	go vet ./...
+	go test ./...
+	go build -o gh-csd .
 
 clean:
-	rm -f gh-csd spinel/smoke spinel/types-check
+	rm -f gh-csd

@@ -4,7 +4,7 @@ Edit a GitHub repo in a local worktree, and run it in that worktree's own codesp
 
 - `gh csd up` makes a codespace for the worktree you are in. `gh csd up <branch>` uses that branch's worktree, or makes one next to your main checkout (`~/src/my-app` → `~/src/my-app-<branch>`).
 - `gh csd run <command>` copies the worktree's changes to the codespace with rsync, then runs the command there over SSH.
-- `gh csd status` lists each worktree and its codespace. Add `--json <fields>` for scripts.
+- `gh csd status` lists each worktree and its codespace. Add `--json <fields>`, with `--jq` or `--template`, for scripts, as in `gh`.
 - `gh csd down` deletes the codespace, the worktree, and the branch.
 
 The codespace checks out the base branch (origin's default branch). `run` copies your changes on top of it; it never checks out your branch there.
@@ -13,7 +13,7 @@ Each worktree has its own codespace, so you can work on several branches at once
 
 ## Requirements
 
-- A Mac with Apple silicon.
+- macOS or Linux.
 - `gh`, logged in with the `codespace` scope: `gh auth refresh -s codespace`.
 - `rsync` and `ssh`.
 - A local clone of the repo, with its `origin` remote on github.com.
