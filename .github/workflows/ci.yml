@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  check:
+  test:
     strategy:
       matrix:
         os: [macos-latest, ubuntu-latest]
@@ -23,6 +23,14 @@ jobs:
       - run: make check
         env:
           GIT_CONFIG_GLOBAL: /dev/null
+
+  # The branch ruleset requires a check named "check": it passes only when
+  # every platform above passed.
+  check:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "tests passed on macOS and Linux"
 
   # Builds macOS and Linux binaries (script/build.sh) and attaches them to the tag's release,
   # where gh extension install finds them.
