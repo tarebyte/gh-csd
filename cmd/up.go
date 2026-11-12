@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -21,11 +22,7 @@ checks out the base branch; run copies your changes onto it.`,
 		Example: "  $ gh csd up\n  $ gh csd up me/fix-login -m standardLinux32gb",
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			flags := map[string]string{"machine": machine, "devcontainer": devcontainer}
-			if defaultPermissions {
-				flags["default_permissions"] = "true"
-			}
-			c, err := commands(cmd.Context(), flags)
+			c, err := commands(cmd.Context(), upFlags(cmd, machine, devcontainer, defaultPermissions))
 			if err != nil {
 				return err
 			}
@@ -37,4 +34,14 @@ checks out the base branch; run copies your changes onto it.`,
 	cmd.Flags().BoolVar(&defaultPermissions, "default-permissions", false, "Do not ask to approve the devcontainer's extra permissions")
 	cmd.Flags().BoolVarP(&status, "status", "s", false, "Wait until the dotfiles finish too")
 	return cmd
+}
+
+// upFlags are the settings up's flags set. An explicit
+// --default-permissions=false overrides the config too.
+func upFlags(cmd *cobra.Command, machine, devcontainer string, defaultPermissions bool) map[string]string {
+	flags := map[string]string{"machine": machine, "devcontainer": devcontainer}
+	if cmd.Flags().Changed("default-permissions") {
+		flags["default_permissions"] = strconv.FormatBool(defaultPermissions)
+	}
+	return flags
 }

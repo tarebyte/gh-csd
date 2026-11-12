@@ -87,7 +87,7 @@ func (c *Commands) Up(ctx context.Context, branch string, status bool) error {
 	if !created {
 		c.log("reusing worktree %s", tree.Path)
 	}
-	name, err := c.reusableCodespace(ctx, tree)
+	name, err := c.reusableCodespace(ctx, tree, status)
 	if err == nil && name == "" {
 		name, err = c.createCodespace(ctx, tree, status)
 	}
@@ -113,7 +113,9 @@ func (c *Commands) Run(ctx context.Context, args []string) (int, error) {
 	}
 	name := c.settings.Codespace()
 	if name == "" {
-		name = tree.Codespace(ctx)
+		if name, err = tree.Codespace(ctx); err != nil {
+			return 0, err
+		}
 	}
 	if name == "" {
 		return 0, fmt.Errorf("no codespace for %s; run gh csd up first, or pass -c", tree.Path)
@@ -178,7 +180,11 @@ func (c *Commands) Down(ctx context.Context, branch string, force bool) error {
 			return fmt.Errorf("%s has work that would be lost; --force deletes it anyway\n%s", tree.Branch, work)
 		}
 	}
-	if name := tree.Codespace(ctx); name != "" {
+	name, err := tree.Codespace(ctx)
+	if err != nil {
+		return err
+	}
+	if name != "" {
 		exists, err := c.codespaces.Exist(ctx, name)
 		if err != nil {
 			return err
@@ -236,7 +242,11 @@ func (c *Commands) downTarget(ctx context.Context, branch string) (*Worktree, er
 		return nil, err
 	}
 	what := fmt.Sprintf("worktree %s and branch %s", tree.Path, tree.Branch)
-	if name := tree.Codespace(ctx); name != "" {
+	name, err := tree.Codespace(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if name != "" {
 		what = "codespace " + name + ", " + what
 	}
 	ok, err := c.Prompt.Confirm("Delete " + what + "?")
@@ -249,21 +259,30 @@ func (c *Commands) downTarget(ctx context.Context, branch string) (*Worktree, er
 	return tree, nil
 }
 
-func (c *Commands) reusableCodespace(ctx context.Context, tree *Worktree) (string, error) {
-	name := tree.Codespace(ctx)
-	if name == "" {
-		return "", nil
+// reusableCodespace is the bound codespace when it still exists, else "".
+// With status, it also waits for the dotfiles, which an earlier up without
+// -s, or one cancelled after binding, never waited for.
+func (c *Commands) reusableCodespace(ctx context.Context, tree *Worktree, status bool) (string, error) {
+	name, err := tree.Codespace(ctx)
+	if err != nil || name == "" {
+		return "", err
 	}
 	exists, err := c.codespaces.Exist(ctx, name)
 	if err != nil || !exists {
 		return "", err
 	}
 	c.log("reusing codespace %s", name)
+	// Cleared even after Ctrl-C, which cancels ctx.
+	defer tree.SetPhase(context.WithoutCancel(ctx), "")
 	// A stopped codespace restarts on connect, and its services start after it.
 	if err := c.waitForServices(ctx, tree, name); err != nil {
 		return "", err
 	}
-	tree.SetPhase(ctx, "")
+	if status {
+		if err := c.waitForDotfiles(ctx, tree, name); err != nil {
+			return "", err
+		}
+	}
 	return name, nil
 }
 
@@ -325,6 +344,11 @@ func (c *Commands) waitUntilReady(ctx context.Context, tree *Worktree, name stri
 	if err := c.waitForServices(ctx, tree, name); err != nil || !status {
 		return err
 	}
+	return c.waitForDotfiles(ctx, tree, name)
+}
+
+// waitForDotfiles waits for the dotfiles' setup-complete marker, for up -s.
+func (c *Commands) waitForDotfiles(ctx context.Context, tree *Worktree, name string) error {
 	c.log("waiting for the dotfiles to finish...")
 	tree.SetPhase(ctx, "dotfiles…")
 	done, err := c.waitForFile(ctx, name, doneMarker, 30*time.Minute, 30*time.Second)
@@ -381,7 +405,11 @@ func (c *Commands) statusRows(ctx context.Context) ([]map[string]string, error) 
 	}
 	rows := []map[string]string{}
 	for _, tree := range trees {
-		name, state := tree.Codespace(ctx), ""
+		name, err := tree.Codespace(ctx)
+		if err != nil {
+			return nil, err
+		}
+		state := ""
 		if name != "" {
 			if state = states[name]; state == "" {
 				state = "Deleted"

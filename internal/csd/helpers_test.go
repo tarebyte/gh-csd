@@ -277,6 +277,14 @@ func sh(t *testing.T, args ...string) string {
 	return strings.TrimSpace(out.String())
 }
 
+// bound is w's codespace binding, failing the test on a read error.
+func bound(t *testing.T, w *Worktree) string {
+	t.Helper()
+	name, err := w.Codespace(bg)
+	must(t, err)
+	return name
+}
+
 func write(t *testing.T, path, text string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {

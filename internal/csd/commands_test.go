@@ -114,13 +114,13 @@ func TestCreateBranchesFromTheBaseOrChecksOutAnExistingBranch(t *testing.T) {
 func TestBindingLivesInTheWorktreesOwnGitDir(t *testing.T) {
 	e := newEnv(t)
 	one, two := e.created("me/one"), e.created("me/two")
-	equal(t, "", one.Codespace(bg))
+	equal(t, "", bound(t, one))
 	must(t, one.Bind(bg, "cs-one"))
 	must(t, two.Bind(bg, "cs-two"))
-	equal(t, "cs-one", one.Codespace(bg))
+	equal(t, "cs-one", bound(t, one))
 	cur, err := Current(bg, ExecRunner{}, two.Path, "master")
 	must(t, err)
-	equal(t, "cs-two", cur.Codespace(bg))
+	equal(t, "cs-two", bound(t, cur))
 	equal(t, true, exists(e.main+"/.git/worktrees/my-app-me-one/"+BindingFile))
 }
 
@@ -167,7 +167,7 @@ func TestUpCreatesTheWorktreeAndCodespaceThenWaitsAndSyncs(t *testing.T) {
 	must(t, e.at(e.main).Up(bg, "me/feature", false))
 	w := e.tree("me/feature")
 	equal(t, true, w.Exist())
-	equal(t, "cs-new", w.Codespace(bg))
+	equal(t, "cs-new", bound(t, w))
 	equal(t, 15*time.Second, e.clock.now)
 	equal(t, "", w.Phase(bg))
 	for _, s := range e.fake.sshScripts() {
@@ -203,7 +203,7 @@ func TestUpReplacesABoundCodespaceThatIsGone(t *testing.T) {
 	e.api.on("GET", "user/codespaces/cs-gone", 404, "")
 	e.newCodespace()
 	must(t, e.at(e.main).Up(bg, "me/feature", false))
-	equal(t, "cs-new", w.Codespace(bg))
+	equal(t, "cs-new", bound(t, w))
 }
 
 // Regression: the first test after up failed on a database, which accepts
@@ -249,7 +249,7 @@ func TestUpWithoutABranchUsesTheWorktreeItRunsIn(t *testing.T) {
 	contains(t, e.err.String(), "reusing worktree "+elsewhere)
 	contains(t, strings.Join(e.fake.matching("gh", "codespace", "create")[0], " "), "-d me/feature")
 	cur, _ := Current(bg, ExecRunner{}, elsewhere, "master")
-	equal(t, "cs-new", cur.Codespace(bg))
+	equal(t, "cs-new", bound(t, cur))
 }
 
 func TestUpWithoutABranchRefusesTheMainCheckout(t *testing.T) {
@@ -348,7 +348,7 @@ func TestRunRefusesACodespaceAnotherWorktreeOwnsAndKeepsTheBinding(t *testing.T)
 	e.fake.on(Result{Out: cmdSSHConfig}, "gh", "codespace", "ssh", "--config").onSSH("cat ", Result{Out: "other-mac:/src/other\n"})
 	_, err := e.commands(w.Path, nil, map[string]string{"codespace": "cs-taken"}).Run(bg, nil)
 	mustFail(t, err, "in use by other-mac:/src/other; use another codespace, or pass --takeover")
-	equal(t, "", w.Codespace(bg))
+	equal(t, "", bound(t, w))
 	equal(t, 0, len(e.fake.matching("rsync")))
 }
 
@@ -358,7 +358,7 @@ func TestRunTakeoverClaimsTheCodespace(t *testing.T) {
 	e.fake.on(Result{Out: cmdSSHConfig}, "gh", "codespace", "ssh", "--config").onSSH("cat ", Result{Out: "other-mac:/src/other\n"})
 	_, err := e.commands(w.Path, nil, map[string]string{"codespace": "cs-taken", "takeover": "true"}).Run(bg, nil)
 	must(t, err)
-	equal(t, "cs-taken", w.Codespace(bg))
+	equal(t, "cs-taken", bound(t, w))
 }
 
 func TestRunWithoutACodespaceSaysToRunUp(t *testing.T) {
@@ -495,7 +495,7 @@ func TestDownStopsWhenItCannotTellIfTheCodespaceExists(t *testing.T) {
 	e.api.on("GET", "user/codespaces/cs1", 502, "")
 	mustFail(t, e.at(e.main).Down(bg, "me/feature", false), "checking codespace cs1")
 	equal(t, true, w.Exist())
-	equal(t, "cs1", w.Codespace(bg))
+	equal(t, "cs1", bound(t, w))
 }
 
 func TestUpStopsWhenItCannotTellIfTheCodespaceExists(t *testing.T) {
@@ -526,4 +526,41 @@ func TestRunStopsWhenTheLocalDiffFails(t *testing.T) {
 	for _, script := range e.fake.sshScripts() {
 		notContains(t, script, "git cat-file")
 	}
+}
+
+// Regression: an unreadable binding read as "no codespace", so down
+// removed the worktree and left its codespace running.
+func TestDownStopsWhenTheBindingCannotBeRead(t *testing.T) {
+	e := newEnv(t)
+	w := e.created("me/feature")
+	gitDir := sh(t, "git", "-C", w.Path, "rev-parse", "--absolute-git-dir")
+	must(t, os.Mkdir(gitDir+"/"+BindingFile, 0o755)) // a directory cannot be read as a file
+	mustFail(t, e.at(e.main).Down(bg, "me/feature", false), "reading the codespace binding")
+	equal(t, true, w.Exist())
+}
+
+// Regression: up -s waited for the dotfiles only when it created the
+// codespace, so a retry after a plain up reported ready too early.
+func TestUpStatusWaitsForTheDotfilesOnAReusedCodespace(t *testing.T) {
+	e := newEnv(t)
+	must(t, e.created("me/feature").Bind(bg, "cs-old"))
+	e.fake.on(Result{Out: cmdSSHConfig}, "gh", "codespace", "ssh", "--config").onSSH("setup-complete", Result{Status: 1})
+	must(t, e.commands(e.main, map[string]string{"ready_check": "none"}, nil).Up(bg, "me/feature", true))
+	contains(t, e.err.String(), "reusing codespace cs-old")
+	contains(t, e.err.String(), "dotfiles finished")
+	equal(t, 30*time.Second, e.clock.now)
+	equal(t, "", e.tree("me/feature").Phase(bg))
+}
+
+// Paths with characters git would quote without -z, a newline among them,
+// are found as they are.
+func TestWorktreesWithUnusualPathsAreFound(t *testing.T) {
+	e := newEnv(t)
+	odd := e.root + "/José\nwt"
+	sh(t, "git", "-C", e.main, "worktree", "add", "-q", "-b", "me/odd", odd, "origin/master")
+	equal(t, odd, e.tree("me/odd").Path)
+	all, err := All(bg, ExecRunner{}, e.main, "master")
+	must(t, err)
+	equal(t, 1, len(all))
+	equal(t, odd, all[0].Path)
 }

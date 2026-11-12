@@ -89,28 +89,30 @@ func Current(ctx context.Context, r Runner, cwd, base string) (*Worktree, error)
 
 // worktreeList is the main checkout (git lists it first) and [path, branch]
 // of every other worktree; branch is "" when detached. The main checkout is
-// never among them: down would try to remove it.
+// never among them: down would try to remove it. -z keeps paths exactly as
+// they are, whatever characters they hold.
 func worktreeList(ctx context.Context, r Runner, cwd string) (string, [][2]string, error) {
-	out, err := git(ctx, r, cwd, "worktree", "list", "--porcelain")
+	out, err := gitRaw(ctx, r, cwd, "worktree", "list", "--porcelain", "-z")
 	if err != nil {
 		return "", nil, err
 	}
-	var main string
+	var main, path, branch string
 	var linked [][2]string
-	for i, entry := range strings.Split(out, "\n\n") {
-		lines := strings.Split(entry, "\n")
-		path := strings.TrimPrefix(lines[0], "worktree ")
-		if i == 0 {
-			main = path
-			continue
-		}
-		branch := ""
-		for _, line := range lines {
-			if b, ok := strings.CutPrefix(line, "branch refs/heads/"); ok {
-				branch = b
+	// Each attribute ends in NUL, and an empty attribute ends a worktree.
+	for _, attr := range strings.Split(out, "\x00") {
+		switch {
+		case attr == "" && path != "":
+			if main == "" {
+				main = path
+			} else {
+				linked = append(linked, [2]string{path, branch})
 			}
+			path, branch = "", ""
+		case strings.HasPrefix(attr, "worktree "):
+			path = strings.TrimPrefix(attr, "worktree ")
+		case strings.HasPrefix(attr, "branch refs/heads/"):
+			branch = strings.TrimPrefix(attr, "branch refs/heads/")
 		}
-		linked = append(linked, [2]string{path, branch})
 	}
 	return main, linked, nil
 }
@@ -160,8 +162,23 @@ func (w *Worktree) Create(ctx context.Context) (bool, error) {
 	return err == nil, err
 }
 
-// Codespace is the bound codespace's name, or "".
-func (w *Worktree) Codespace(ctx context.Context) string { return w.readGitFile(ctx, BindingFile) }
+// Codespace is the bound codespace's name, or "" when none is bound. Any
+// other failure to read the binding is an error: guessing "none" would let
+// down orphan a codespace, or up create a second one.
+func (w *Worktree) Codespace(ctx context.Context) (string, error) {
+	path, err := w.gitFile(ctx, BindingFile)
+	if err != nil {
+		return "", err
+	}
+	text, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading the codespace binding: %w", err)
+	}
+	return strings.TrimSpace(string(text)), nil
+}
 
 // Bind records the worktree's codespace.
 func (w *Worktree) Bind(ctx context.Context, codespace string) error {
@@ -172,8 +189,16 @@ func (w *Worktree) Bind(ctx context.Context, codespace string) error {
 	return os.WriteFile(path, []byte(codespace+"\n"), 0o644)
 }
 
-// Phase is what up is doing with the codespace ("" when nothing).
-func (w *Worktree) Phase(ctx context.Context) string { return w.readGitFile(ctx, StatusFile) }
+// Phase is what up is doing with the codespace ("" when nothing). It is
+// shown, never relied on, so a failure to read it is "".
+func (w *Worktree) Phase(ctx context.Context) string {
+	path, err := w.gitFile(ctx, StatusFile)
+	if err != nil {
+		return ""
+	}
+	text, _ := os.ReadFile(path)
+	return strings.TrimSpace(string(text))
+}
 
 // SetPhase records it; "" clears it. It is shown, never relied on, so a
 // failure to write it is ignored.
@@ -256,13 +281,4 @@ func (w *Worktree) Existing(paths []string) []string {
 func (w *Worktree) gitFile(ctx context.Context, name string) (string, error) {
 	dir, err := git(ctx, w.runner, w.Path, "rev-parse", "--absolute-git-dir")
 	return filepath.Join(dir, name), err
-}
-
-func (w *Worktree) readGitFile(ctx context.Context, name string) string {
-	path, err := w.gitFile(ctx, name)
-	if err != nil {
-		return ""
-	}
-	text, _ := os.ReadFile(path)
-	return strings.TrimSpace(string(text))
 }

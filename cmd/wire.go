@@ -37,7 +37,9 @@ func commands(ctx context.Context, flags map[string]string) (*csd.Commands, erro
 	if err != nil {
 		return nil, err
 	}
-	client, err := api.DefaultRESTClient()
+	// Codespaces exist only on github.com, whatever gh's default host
+	// (GH_HOST) is; a 404 from another server would read as "deleted".
+	client, err := api.NewRESTClient(api.ClientOptions{Host: "github.com"})
 	if err != nil {
 		return nil, err
 	}

@@ -60,3 +60,22 @@ func TestJSONFlagChecks(t *testing.T) {
 		t.Errorf("jq without json: %v", err)
 	}
 }
+
+// Regression: --default-permissions=false was dropped, so a config with
+// default_permissions: true still skipped the approval.
+func TestUpPassesAnExplicitDefaultPermissions(t *testing.T) {
+	for args, want := range map[string]string{
+		"--default-permissions":       "true",
+		"--default-permissions=false": "false",
+		"":                            "",
+	} {
+		cmd := newUpCmd()
+		if err := cmd.ParseFlags(strings.Fields(args)); err != nil {
+			t.Fatal(err)
+		}
+		on, _ := cmd.Flags().GetBool("default-permissions")
+		if got := upFlags(cmd, "", "", on)["default_permissions"]; got != want {
+			t.Errorf("%q: want %q, got %q", args, want, got)
+		}
+	}
+}
