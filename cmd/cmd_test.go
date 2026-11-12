@@ -1,4 +1,4 @@
-package main
+package cmd
 
 import (
 	"context"
@@ -22,7 +22,7 @@ func TestHelpAndUsageErrorsExitLikeGh(t *testing.T) {
 	}
 	for args, want := range cases {
 		var stderr strings.Builder
-		if got := execute(context.Background(), strings.Fields(args), &stderr); got != want {
+		if got := Execute(context.Background(), strings.Fields(args), &stderr); got != want {
 			t.Errorf("gh csd %s: want exit %d, got %d: %s", args, want, got, stderr.String())
 		}
 	}
@@ -30,14 +30,14 @@ func TestHelpAndUsageErrorsExitLikeGh(t *testing.T) {
 
 func TestErrorsGoToStderrWithThePrefix(t *testing.T) {
 	var stderr strings.Builder
-	execute(context.Background(), []string{"status", "--json"}, &stderr)
+	Execute(context.Background(), []string{"status", "--json"}, &stderr)
 	if !strings.HasPrefix(stderr.String(), "gh csd: Specify one or more comma-separated fields for `--json`:") {
 		t.Errorf("stderr: %q", stderr.String())
 	}
 }
 
 func TestRunTakesFlagsOnlyBeforeTheCommand(t *testing.T) {
-	cmd := runCmd()
+	cmd := newRunCmd()
 	if err := cmd.ParseFlags([]string{"-c", "cs1", "--takeover", "bin/test", "-v", "--seed", "1"}); err != nil {
 		t.Fatal(err)
 	}

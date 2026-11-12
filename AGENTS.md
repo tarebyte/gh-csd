@@ -4,7 +4,8 @@ gh csd is a `gh` extension that pairs a local git worktree with its own GitHub C
 
 ## Layout
 
-- `main.go`: cobra commands, flags, `--help` text, exit codes (0 done, 1 failed, 2 cancelled, as gh), and the wiring of the real runner, REST client, terminal, prompter, and browser. Keep logic in `internal/csd`.
+- `main.go`: the signal context and `cmd.Execute`, nothing else.
+- `cmd/`: one file per cobra command, as gh lays out `pkg/cmd/codespace`. Each has a `newXCmd()` constructor (no package globals or `init()`), parses flags, and calls `internal/csd`. `root.go` holds `Execute`, the exit codes (0 done, 1 failed, 2 cancelled, as gh), and flag errors; `wire.go` builds the real runner, REST client, terminal, prompter, and browser.
 - `internal/csd/commands.go`: the `up`, `run`, `status`, `down`, and `init` commands.
 - `internal/csd/settings.go`, `config.go`: settings from flags, the config file, and the origin remote.
 - `internal/csd/worktree.go`, `sync.go`, `changeset.go`: the local side and the rsync of changes.
