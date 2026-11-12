@@ -34,12 +34,14 @@ jobs:
       - run: go build -o gh-csd .
 
   # The branch ruleset requires a check named "check": it passes only when
-  # every platform above passed.
+  # every platform above passed. always() keeps it from being skipped when
+  # a test fails, since GitHub counts a skipped required check as passing.
   check:
     needs: test
+    if: always()
     runs-on: ubuntu-latest
     steps:
-      - run: echo "tests passed on macOS, Linux, and Windows"
+      - run: test "${{ needs.test.result }}" = success
 
   # Builds macOS and Linux binaries (script/build.sh) and attaches them to the tag's release,
   # where gh extension install finds them.

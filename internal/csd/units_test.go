@@ -51,8 +51,8 @@ func TestSplitZAndParsePorcelain(t *testing.T) {
 
 func TestConfigPath(t *testing.T) {
 	equal(t, "/x.yml", ConfigPath(map[string]string{"GH_CSD_CONFIG": "/x.yml", "XDG_CONFIG_HOME": "/xdg"}))
-	equal(t, "/xdg/gh-csd/config.yml", ConfigPath(map[string]string{"XDG_CONFIG_HOME": "/xdg", "HOME": "/h"}))
-	equal(t, "/h/.config/gh-csd/config.yml", ConfigPath(map[string]string{"HOME": "/h"}))
+	equal(t, filepath.Join("/xdg", "gh-csd", "config.yml"), ConfigPath(map[string]string{"XDG_CONFIG_HOME": "/xdg", "HOME": "/h"}))
+	equal(t, filepath.Join("/h", ".config", "gh-csd", "config.yml"), ConfigPath(map[string]string{"HOME": "/h"}))
 }
 
 func TestParseConfig(t *testing.T) {
