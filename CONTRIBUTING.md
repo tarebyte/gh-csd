@@ -1,17 +1,15 @@
 # Contributing
 
-gh csd is Ruby compiled to a native binary with [Spinel](https://github.com/matz/spinel). You need Spinel to build. The Makefile looks for it at `~/src/matz/spinel/spinel`; set `SPINEL` to change that.
+gh csd is a Go program built on [go-gh](https://github.com/cli/go-gh). You need Go (the version in `go.mod`).
 
 ```sh
-make test    # unit tests on CRuby
-make check   # tests, spinel diff, type check, and build
-make doctor  # Spinel's health report, for debugging
+make test    # the tests
+make check   # gofmt, go vet, the tests, and the build
+make build   # ./gh-csd; run it as `gh csd` with `gh extension install .`
 ```
 
-If the compiled binary behaves differently from CRuby, run `make doctor`. It reports calls that Spinel cannot compile or silently turns into `nil`. Findings inside Spinel's bundled packages (such as `psych` and `shellwords`) are expected.
+Run `make check` before you open a pull request. CI runs the same target on macOS and Linux, and pull requests need it to pass.
 
-Run `make check` before you open a pull request. CI runs the same target, and pull requests need it to pass.
+[AGENTS.md](AGENTS.md) explains the layout, the test fakes, and the names other code depends on.
 
-[AGENTS.md](AGENTS.md) explains the Spinel rules, the test fakes, and the names other code depends on.
-
-To release, push a new `v*` tag. CI builds `gh-csd-darwin-arm64` and attaches it to a GitHub release. `gh skill install` also takes the skill from the latest release.
+To release, push a new `v*` tag. CI builds a binary for each platform with [gh-extension-precompile](https://github.com/cli/gh-extension-precompile) and attaches them to a GitHub release. `gh skill install` also takes the skill from the latest release.

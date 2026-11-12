@@ -5,7 +5,7 @@ When `up` creates a codespace, it waits for two marker files that your [dotfiles
 | File | What gh csd does with it |
 | --- | --- |
 | `~/.local/state/gh-csd/setup-ready` | `up` waits up to 20 minutes for this file, then continues without it. |
-| `~/.local/state/gh-csd/setup-complete` | gh csd sends a "ready for use" notification when this file appears, up to 30 minutes after `up`. |
+| `~/.local/state/gh-csd/setup-complete` | `up -s` waits up to 30 minutes for this file before it returns. Without `-s`, `up` does not wait for it. |
 
 Write `setup-ready` once the codespace has what your first `gh csd run` needs. Write `setup-complete` after slower installs that can finish in the background.
 
