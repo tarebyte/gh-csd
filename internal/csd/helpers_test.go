@@ -176,6 +176,30 @@ func countOf(items []string, s string) int {
 	return n
 }
 
+// TestMain lets the test binary stand in for a child program on every
+// platform (Go's helper-process pattern): with CSD_TEST_CHILD set, it acts
+// as that program instead of running the tests.
+func TestMain(m *testing.M) {
+	switch os.Getenv("CSD_TEST_CHILD") {
+	case "":
+		os.Exit(m.Run())
+	case "echo":
+		in, _ := io.ReadAll(os.Stdin)
+		os.Stdout.Write(in)
+		os.Stderr.WriteString("err\n")
+		os.Exit(3)
+	case "sleep":
+		time.Sleep(5 * time.Second)
+		os.Exit(0)
+	}
+}
+
+// child is a command that runs this test binary as the named program.
+func child(t *testing.T, name string) []string {
+	t.Setenv("CSD_TEST_CHILD", name)
+	return []string{os.Args[0]}
+}
+
 // fakeClock advances instantly.
 type fakeClock struct {
 	now    time.Duration
@@ -232,6 +256,8 @@ func gitRepo(t *testing.T) (root, main string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// git prints forward slashes on Windows too.
+	root = filepath.ToSlash(root)
 	main = root + "/my-app"
 	sh(t, "git", "init", "-q", "--bare", "-b", "master", root+"/origin.git")
 	sh(t, "git", "clone", "-q", root+"/origin.git", main)

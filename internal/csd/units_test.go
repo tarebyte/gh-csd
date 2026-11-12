@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -229,7 +230,9 @@ func TestConfigIsCachedInAPrivateDirectory(t *testing.T) {
 	equal(t, "cs.fake-cs.master", host)
 	info, err := os.Stat(r.cacheDir)
 	must(t, err)
-	equal(t, os.FileMode(0o700), info.Mode().Perm())
+	if runtime.GOOS != "windows" { // Windows has no Unix permissions
+		equal(t, os.FileMode(0o700), info.Mode().Perm())
+	}
 
 	again := &Remote{runner: f, gh: "gh", Codespace: "fake-cs", cacheDir: r.cacheDir}
 	host, err = again.Host(bg)
@@ -450,7 +453,7 @@ func TestGHRepoMustBeOnGitHubCom(t *testing.T) {
 // --- ExecRunner ---
 
 func TestExecRunner(t *testing.T) {
-	res, err := ExecRunner{}.Capture(bg, []string{"sh", "-c", "cat; echo err >&2; exit 3"}, "in")
+	res, err := ExecRunner{}.Capture(bg, child(t, "echo"), "in")
 	must(t, err)
 	equal(t, "in", res.Out)
 	equal(t, "err\n", res.Err)
@@ -464,9 +467,9 @@ func TestExecRunner(t *testing.T) {
 func TestExecRunnerReportsACancelNotTheKilledStatus(t *testing.T) {
 	ctx, cancel := context.WithTimeout(bg, 50*time.Millisecond)
 	defer cancel()
-	code, err := ExecRunner{}.Run(ctx, []string{"sleep", "5"})
+	code, err := ExecRunner{}.Run(ctx, child(t, "sleep"))
 	equal(t, 0, code)
 	equal(t, true, errors.Is(err, context.DeadlineExceeded))
-	_, err = ExecRunner{}.Capture(ctx, []string{"sleep", "5"}, "")
+	_, err = ExecRunner{}.Capture(ctx, child(t, "sleep"), "")
 	equal(t, true, errors.Is(err, context.DeadlineExceeded))
 }

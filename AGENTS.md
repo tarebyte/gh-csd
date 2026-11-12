@@ -14,7 +14,7 @@ gh csd is a `gh` extension that pairs a local git worktree with its own GitHub C
 
 ## Commands
 
-- `make check`: run before finishing any change. It checks `gofmt`, then runs `go vet`, the tests, and the build. CI runs it on macOS and Linux.
+- `make check`: run before finishing any change. It checks `gofmt`, then runs `go vet`, the tests, and the build. CI runs the same steps on macOS, Linux, and Windows; releases ship macOS and Linux only.
 - `make test`: the tests only.
 
 ## Use go-gh
