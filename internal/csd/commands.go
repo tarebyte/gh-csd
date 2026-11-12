@@ -268,7 +268,8 @@ func (c *Commands) reusableCodespace(ctx context.Context, tree *Worktree) (strin
 }
 
 func (c *Commands) createCodespace(ctx context.Context, tree *Worktree, status bool) (string, error) {
-	defer tree.SetPhase(ctx, "")
+	// Cleared even after Ctrl-C, which cancels ctx.
+	defer tree.SetPhase(context.WithoutCancel(ctx), "")
 	if err := c.chooseMachine(ctx); err != nil {
 		return "", err
 	}

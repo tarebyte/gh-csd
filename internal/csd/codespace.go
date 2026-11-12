@@ -201,7 +201,13 @@ func (c *Codespaces) approve(ctx context.Context, link string, s *Settings) erro
 		fmt.Fprintf(c.log, "gh csd: could not open the browser: %v\n", err)
 	}
 	ok, err := Wait(ctx, c.clock, 10*time.Minute, 5*time.Second, func() (bool, error) {
-		accepted, _ := c.PermissionsAccepted(ctx, s) // a failed check is retried, not fatal
+		accepted, err := c.PermissionsAccepted(ctx, s)
+		// A client error (bad auth, no access) never clears up; a server or
+		// network error might, so it is retried.
+		var httpErr *api.HTTPError
+		if errors.As(err, &httpErr) && httpErr.StatusCode < 500 {
+			return false, fmt.Errorf("checking the permissions approval: %w", err)
+		}
 		return accepted, ctx.Err()
 	})
 	if err != nil {

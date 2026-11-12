@@ -65,6 +65,9 @@ func ForCheckout(ctx context.Context, env map[string]string, cwd string, flags m
 		if err != nil {
 			return nil, fmt.Errorf("GH_REPO: %w", err)
 		}
+		if parsed.Host != "" && !strings.EqualFold(parsed.Host, "github.com") {
+			return nil, fmt.Errorf("GH_REPO: codespaces are on github.com, not %s", parsed.Host)
+		}
 		repo = parsed.Owner + "/" + parsed.Name
 	}
 	config, err := LoadConfig(env, repo)

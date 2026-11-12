@@ -432,6 +432,21 @@ func TestStatesReadsEveryPage(t *testing.T) {
 	equal(t, 2, len(a.calls))
 }
 
+func TestApprovalStopsOnAClientError(t *testing.T) {
+	f := newFake().on(Result{Err: approvalErr, Status: 1}, "gh", "codespace", "create")
+	a := (&fakeAPI{}).on("GET", "repos/me/my-app/codespaces/permissions_check", 403, "")
+	clock := &fakeClock{}
+	c, _ := newTestCodespaces(f, a, clock)
+	_, err := c.Create(bg, "b", testSettings(nil, "/", nil, nil))
+	mustFail(t, err, "checking the permissions approval")
+	equal(t, time.Duration(0), clock.now)
+}
+
+func TestGHRepoMustBeOnGitHubCom(t *testing.T) {
+	_, err := ForCheckout(bg, map[string]string{"GH_CSD_CONFIG": "/none.yml", "GH_REPO": "ghe.example.com/o/r"}, "/src/x", nil, newFake(), nil)
+	mustFail(t, err, "not ghe.example.com")
+}
+
 // --- ExecRunner ---
 
 func TestExecRunner(t *testing.T) {
@@ -442,4 +457,16 @@ func TestExecRunner(t *testing.T) {
 	equal(t, 3, res.Status)
 	_, err = ExecRunner{}.Capture(bg, []string{filepath.Join(t.TempDir(), "missing")}, "")
 	mustFail(t, err, "running ")
+}
+
+// Regression: a child killed by Ctrl-C reported exit -1, which run passed
+// on as exit status 255 instead of gh's 2 for a cancel.
+func TestExecRunnerReportsACancelNotTheKilledStatus(t *testing.T) {
+	ctx, cancel := context.WithTimeout(bg, 50*time.Millisecond)
+	defer cancel()
+	code, err := ExecRunner{}.Run(ctx, []string{"sleep", "5"})
+	equal(t, 0, code)
+	equal(t, true, errors.Is(err, context.DeadlineExceeded))
+	_, err = ExecRunner{}.Capture(ctx, []string{"sleep", "5"}, "")
+	equal(t, true, errors.Is(err, context.DeadlineExceeded))
 }
