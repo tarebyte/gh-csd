@@ -65,7 +65,7 @@ func Here(ctx context.Context, r Runner, cwd, base string) (*Worktree, error) {
 	return tree, nil
 }
 
-// All is every linked worktree of the checkout at cwd, in git's order.
+// All is every linked worktree of the checkout at cwd whose folder exists, in git's order.
 func All(ctx context.Context, r Runner, cwd, base string) ([]*Worktree, error) {
 	main, linked, err := worktreeList(ctx, r, cwd)
 	if err != nil {
@@ -73,7 +73,10 @@ func All(ctx context.Context, r Runner, cwd, base string) ([]*Worktree, error) {
 	}
 	trees := make([]*Worktree, 0, len(linked))
 	for _, l := range linked {
-		trees = append(trees, &Worktree{r, l[0], base, l[1], main})
+		// A worktree whose folder is gone has no git dir to read; up and down still find it.
+		if tree := (&Worktree{r, l[0], base, l[1], main}); tree.Exist() {
+			trees = append(trees, tree)
+		}
 	}
 	return trees, nil
 }

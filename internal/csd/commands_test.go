@@ -447,6 +447,31 @@ func TestStatusListsEachWorktreeWithItsCodespaceAndState(t *testing.T) {
 	equal(t, "me/one\tcs-one\tAvailable\t\t"+one.Path+"\nme/two\t\t\t\t"+e.main+"-me-two\n", e.out.String())
 }
 
+func TestStatusSkipsAPrunableWorktree(t *testing.T) {
+	e := newEnv(t)
+	one := e.created("me/one")
+	must(t, one.Bind(bg, "cs-one"))
+	gone := e.created("me/gone")
+	must(t, os.RemoveAll(gone.Path)) // git now lists it as prunable
+	e.api.on("GET", "repos/me/my-app/codespaces", 200, `{"codespaces":[{"name":"cs-one","state":"Available"}]}`)
+	must(t, e.at(e.main).Status(bg, StatusOptions{}))
+	equal(t, "me/one\tcs-one\tAvailable\t\t"+one.Path+"\n", e.out.String())
+}
+
+func TestUpOnAPrunableWorktreeLetsGitSayHowToClearIt(t *testing.T) {
+	e := newEnv(t)
+	gone := e.created("me/gone")
+	must(t, os.RemoveAll(gone.Path))
+	mustFail(t, e.at(e.main).Up(bg, "me/gone", false), "missing but already registered worktree")
+}
+
+func TestDownOnAPrunableWorktreeNamesItsPath(t *testing.T) {
+	e := newEnv(t)
+	gone := e.created("me/gone")
+	must(t, os.RemoveAll(gone.Path))
+	mustFail(t, e.at(e.main).Down(bg, "me/gone", false), "no worktree at "+gone.Path)
+}
+
 func TestStatusJSONPrintsTheChosenFields(t *testing.T) {
 	e := newEnv(t)
 	must(t, e.created("me/one").Bind(bg, "cs-gone"))
