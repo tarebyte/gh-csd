@@ -33,6 +33,31 @@ module Csd
       result.success? && result.out.strip == "true"
     end
 
+    # The repo's machine types, as -m takes them.
+    #: (Settings) -> Array[String]
+    def machines(settings)
+      result = @runner.capture(["gh", "api", "repos/#{settings.repo}/codespaces/machines",
+                                "--jq", ".machines[].name"])
+      raise Error, "listing machine types failed: #{result.err.strip}" unless result.success?
+
+      result.out.split("\n").map { |line| line.strip }.reject { |line| line.empty? }
+    end
+
+    # name => state (Available, Shutdown, ...) of the repo's codespaces.
+    #: (Settings) -> Hash[String, String]
+    def states(settings)
+      result = @runner.capture(["gh", "codespace", "list", "-R", settings.repo, "--json", "name,state",
+                                "--jq", ".[] | .name + \" \" + .state"])
+      raise Error, "gh codespace list failed: #{result.err.strip}" unless result.success?
+
+      found = {}
+      result.out.split("\n").each do |line|
+        name, state = line.strip.split(" ", 2)
+        found[name.to_s] = state.to_s unless name.to_s.empty?
+      end
+      found
+    end
+
     #: (String) -> void
     def delete(name)
       result = @runner.capture(["gh", "codespace", "delete", "-c", name, "--force"])
@@ -75,7 +100,7 @@ module Csd
       warn "gh csd: approve the codespace's extra permissions in your browser: #{url}"
       @notifier.open(url)
       approved = @waiter.wait(600, 5) { permissions_accepted?(settings) }
-      raise Error, "no approval after 10 minutes; run up again, or set CS_DEFAULT_PERMISSIONS=1" unless approved
+      raise Error, "no approval after 10 minutes; run up again, or pass --default-permissions" unless approved
     end
   end
 end

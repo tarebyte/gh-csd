@@ -1,22 +1,26 @@
+require "json"
+
 module Csd
   class Commands
     READY = "~/.local/state/gh-csd/setup-ready"
     DONE = "~/.local/state/gh-csd/setup-complete"
 
-    #: (Runner, Waiter, Settings) -> void
-    def initialize(runner, waiter, settings)
+    #: (Runner, Waiter, Settings, Prompt) -> void
+    def initialize(runner, waiter, settings, prompt)
       @runner = runner
       @waiter = waiter
       @settings = settings
-      @notifier = Notifier.new(runner)
-      @codespaces = Codespace.new(runner, @notifier, waiter)
+      @prompt = prompt
+      @codespaces = Codespace.new(runner, Notifier.new(runner), waiter)
     end
 
-    #: (String) -> void
-    def up(branch)
-      tree = Worktree.for_branch(@runner, branch, @settings.cwd, @settings.branch)
+    # branch "" means the worktree at cwd. With status, also waits for the
+    # dotfiles to finish (setup-complete).
+    #: (String, ?status: bool) -> void
+    def up(branch, status: false)
+      tree = worktree(branch)
       log "reusing worktree #{tree.path}" unless tree.create
-      name = reusable_codespace(tree) || create_codespace(tree, branch)
+      name = reusable_codespace(tree) || create_codespace(tree, status)
       sync(tree, name)
       puts "gh csd: ready  worktree=#{tree.path}  codespace=#{name}"
     end
@@ -28,13 +32,24 @@ module Csd
       args.empty? ? 0 : remote.run(args)
     end
 
+    # A table, or with fields (comma-separated), JSON as gh prints it.
+    #: (?String) -> void
+    def status(fields = "")
+      rows = status_rows
+      return puts(JSON.pretty_generate(select_fields(rows, fields))) unless fields.empty?
+      return warn("gh csd: no worktrees") if rows.empty?
+
+      rows.each { |row| puts [row["branch"], row["codespace"], row["state"], row["phase"], row["worktree"]].join("\t") }
+    end
+
+    # branch "" means the worktree at cwd, after asking.
     #: (String, ?force: bool) -> void
     def down(branch, force: false)
-      tree = Worktree.for_branch(@runner, branch, @settings.cwd, @settings.branch)
-      refuse_to_lose_work(tree, branch, force)
+      tree = branch.empty? ? confirmed_here : Worktree.for_branch(@runner, branch, @settings.cwd, @settings.branch)
+      refuse_to_lose_work(tree, tree.branch.to_s, force)
       delete_codespace(tree.codespace)
       tree.remove(force: force)
-      log "removed worktree=#{tree.path} branch=#{branch}"
+      log "removed worktree=#{tree.path} branch=#{tree.branch}"
     end
 
     # Writes the commented template config; never replaces an existing file.
@@ -48,17 +63,26 @@ module Csd
       log "wrote #{path}"
     end
 
-    # Hidden: up starts it in the background to notify once the dotfiles
-    # finish (setup-complete), then clear the worktree's status.
-    # tty is up's iTerm2 tty, or "".
-    #: (String, String, String) -> void
-    def watch(name, tty, status_path)
-      done = @waiter.wait(1800, 30) { remote(name).file?(DONE) }
-      @notifier.notify("gh csd: ready for use", "Dotfiles setup finished in #{name}", tty: tty) if done
-      Worktree.write_status(status_path, "")
+    private
+
+    #: (String) -> Worktree
+    def worktree(branch)
+      return Worktree.here(@runner, @settings.cwd, @settings.branch) if branch.empty?
+
+      Worktree.for_branch(@runner, branch, @settings.cwd, @settings.branch)
     end
 
-    private
+    #: () -> Worktree
+    def confirmed_here
+      raise Error, "pass the branch to down when not in a terminal" unless @prompt.interactive?
+
+      tree = Worktree.here(@runner, @settings.cwd, @settings.branch)
+      what = "worktree #{tree.path} and branch #{tree.branch}"
+      what = "codespace #{tree.codespace}, #{what}" if tree.codespace
+      raise Error, "cancelled" unless @prompt.confirm?("Delete #{what}?")
+
+      tree
+    end
 
     #: (Worktree) -> String?
     def reusable_codespace(tree)
@@ -72,28 +96,52 @@ module Csd
       name
     end
 
-    #: (Worktree, String) -> String
-    def create_codespace(tree, branch)
-      log "creating codespace (a few minutes)..."
+    #: (Worktree, bool) -> String
+    def create_codespace(tree, status)
+      choose_machine
+      log "creating codespace on #{@settings.machine} (a few minutes)..."
       tree.status = "creating…"
-      name = @codespaces.create(branch, @settings)
+      name = @codespaces.create(tree.branch.to_s, @settings)
       tree.bind(name)
-      wait_until_ready_then_watch(tree, name)
+      wait_until_ready(tree, name, status)
       name
-    rescue StandardError
+    ensure
       tree.status = ""
-      raise
     end
 
-    #: (Worktree, String) -> void
-    def wait_until_ready_then_watch(tree, name)
+    # As gh codespace create: the only machine type without asking, else
+    # ask in a terminal, else fail with the flag to pass.
+    #: () -> void
+    def choose_machine
+      return unless @settings.machine.empty?
+
+      names = @codespaces.machines(@settings)
+      raise Error, "#{@settings.repo} has no machine types available" if names.empty?
+      if names.size == 1
+        @settings.machine = names[0].to_s
+      elsif @prompt.interactive?
+        @settings.machine = @prompt.choose("Choose a machine type:", names)
+      else
+        raise Error, "pass -m with one of: #{names.join(", ")}"
+      end
+    end
+
+    #: (Worktree, String, bool) -> void
+    def wait_until_ready(tree, name, status)
       log "waiting for codespace setup..."
       tree.status = "setting up…"
       ready = @waiter.wait(1200, 15) { remote(name).file?(READY) }
       log "no ready marker after 20m; continuing" unless ready
       wait_for_services(tree, name)
+      wait_for_dotfiles(tree, name) if status
+    end
+
+    #: (Worktree, String) -> void
+    def wait_for_dotfiles(tree, name)
+      log "waiting for the dotfiles to finish..."
       tree.status = "dotfiles…"
-      @runner.spawn_detached([@settings.exe, "__watch", name, @notifier.iterm_tty, tree.status_path])
+      done = @waiter.wait(1800, 30) { remote(name).file?(DONE) }
+      log(done ? "dotfiles finished" : "dotfiles not finished after 30m; continuing")
     end
 
     # Services start with the container but take a while to accept
@@ -109,11 +157,31 @@ module Csd
       log "services not ready after 5m; continuing" unless ready
     end
 
+    #: () -> Array[Hash[String, String]]
+    def status_rows
+      states = @codespaces.states(@settings)
+      Worktree.all(@runner, @settings.cwd, @settings.branch).map do |tree|
+        name = tree.codespace.to_s
+        state = name.empty? ? "" : (states[name] || "Deleted")
+        { "worktree" => tree.path, "branch" => tree.branch.to_s, "base" => @settings.branch,
+          "codespace" => name, "state" => state, "phase" => tree.phase }
+      end
+    end
+
+    #: (Array[Hash[String, String]], String) -> Array[Hash[String, String]]
+    def select_fields(rows, fields)
+      wanted = fields.split(",").map { |field| field.strip }
+      unknown = wanted - Cli::JSON_FIELDS
+      raise UsageError, "unknown JSON field #{unknown.join(", ")}; use #{Cli::JSON_FIELDS.join(", ")}" unless unknown.empty?
+
+      rows.map { |row| row.slice(*wanted) }
+    end
+
     #: (Worktree) -> String
     def codespace_for(tree)
       name = @settings.codespace
       name = tree.codespace.to_s if name.empty?
-      raise Error, "no codespace for #{tree.path}; run gh csd up first, or set CS" if name.empty?
+      raise Error, "no codespace for #{tree.path}; run gh csd up first, or pass -c" if name.empty?
 
       name
     end

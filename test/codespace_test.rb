@@ -34,7 +34,7 @@ class CodespaceTest < Minitest::Test
   def test_default_permissions_opts_out_of_the_approval
     @fake.on("gh", "codespace", "create", out: "cs\n")
 
-    @codespace.create("me/feature", csd_settings({ "CS_DEFAULT_PERMISSIONS" => "1" }))
+    @codespace.create("me/feature", csd_settings({}, "/", { "machine" => "m" }, { "default_permissions" => "true" }))
 
     assert_includes @fake.calls_matching("gh", "codespace", "create").first, "--default-permissions"
   end
@@ -59,7 +59,7 @@ class CodespaceTest < Minitest::Test
 
     capture_io do
       error = assert_raises(Csd::Error) { @codespace.create("me/feature", csd_settings({})) }
-      assert_match "CS_DEFAULT_PERMISSIONS=1", error.message
+      assert_match "--default-permissions", error.message
     end
     assert_equal 600, @clock.now
   end
@@ -67,7 +67,7 @@ class CodespaceTest < Minitest::Test
   def test_other_create_failures_raise_with_gh_error
     @fake.on("gh", "codespace", "create", err: "there is no such machine for the repository\n", status: 1)
 
-    error = assert_raises(Csd::Error) { @codespace.create("me/feature", csd_settings({ "CS_MACHINE" => "small" })) }
+    error = assert_raises(Csd::Error) { @codespace.create("me/feature", csd_settings({}, "/", {}, { "machine" => "small" })) }
     assert_match "no such machine", error.message
   end
 
@@ -91,70 +91,31 @@ class CodespaceTest < Minitest::Test
 end
 
 class NotifierTest < Minitest::Test
+  def test_open_opens_the_url
+    fake = FakeRunner.new
+    Csd::Notifier.new(fake).open("https://example.com/x")
+
+    assert_equal [["open", "https://example.com/x"]], fake.calls
+  end
+end
+
+class MachinesAndStatesTest < Minitest::Test
   def setup
     @fake = FakeRunner.new
-    @notifier = Csd::Notifier.new(@fake)
+    @codespace = Csd::Codespace.new(@fake, Csd::Notifier.new(@fake), Csd::Waiter.new(FakeClock.new))
   end
 
-  def test_notify_escapes_applescript_strings
-    @notifier.notify("gh csd: ready", "say \"hi\" \\ bye")
+  def test_machines_lists_the_repos_machine_types
+    @fake.on("gh", "api", out: "small\n\nbig\n")
 
-    assert_equal ["osascript", "-e", "display notification \"say \\\"hi\\\" \\\\ bye\" with title \"gh csd: ready\""], @fake.calls.last
+    assert_equal %w[small big], @codespace.machines(csd_settings({}))
+    assert_equal ["gh", "api", "repos/me/my-app/codespaces/machines", "--jq", ".machines[].name"], @fake.calls.first
   end
 
-  # iTerm2 posts OSC 9 notifications with its own icon.
-  def test_notify_writes_osc9_to_an_iterm_tty_instead_of_osascript
-    Tempfile.create("tty") do |tty|
-      @notifier.notify("gh csd: ready", "done in cs1\a", tty: tty.path)
+  def test_states_maps_names_to_states
+    @fake.on("gh", "codespace", "list", out: "cs-a Available\ncs-b Shutdown\n")
 
-      assert_equal "\e]9;gh csd: ready: done in cs1 \a", File.read(tty.path)
-      assert_empty @fake.calls_matching("osascript")
-    end
-  end
-
-  def test_notify_falls_back_to_osascript_when_the_tty_is_gone
-    @notifier.notify("gh csd: ready", "done", tty: "/dev/no-such-tty")
-
-    assert_equal 1, @fake.calls_matching("osascript").size
-  end
-
-  def test_iterm_tty_finds_an_iterm_ancestor
-    @fake.on("ps", "-o", "tty=", out: "ttys003\n")
-         .on("ps", "-o", "comm=", out: "gh-csd\n").on("ps", "-o", "ppid=", out: "200\n")
-         .on("ps", "-o", "comm=", out: "/Applications/iTerm.app/Contents/MacOS/iTermServer\n")
-
-    assert_equal "/dev/ttys003", @notifier.iterm_tty
-  end
-
-  # Regression: run from Claude Code or a background job, gh csd has no tty
-  # of its own, so the watcher fell back to osascript.
-  def test_iterm_tty_uses_the_nearest_ancestor_with_a_tty
-    @fake.on("ps", "-o", "tty=", out: "??\n")
-         .on("ps", "-o", "comm=", out: "gh-csd\n").on("ps", "-o", "ppid=", out: "150\n")
-         .on("ps", "-o", "tty=", out: "??\n")
-         .on("ps", "-o", "comm=", out: "bash\n").on("ps", "-o", "ppid=", out: "200\n")
-         .on("ps", "-o", "tty=", out: "ttys003\n")
-         .on("ps", "-o", "comm=", out: "claude\n").on("ps", "-o", "ppid=", out: "300\n")
-         .on("ps", "-o", "comm=", out: "/Applications/iTerm.app/Contents/MacOS/iTermServer\n")
-
-    assert_equal "/dev/ttys003", @notifier.iterm_tty
-    assert_equal 3, @fake.calls_matching("ps", "-o", "tty=").size, "stops asking once a tty is found"
-  end
-
-  def test_iterm_tty_is_empty_outside_iterm
-    @fake.on("ps", "-o", "tty=", out: "ttys003\n")
-         .on("ps", "-o", "comm=", out: "gh-csd\n").on("ps", "-o", "ppid=", out: "200\n")
-         .on("ps", "-o", "comm=", out: "/Applications/Ghostty.app/Contents/MacOS/ghostty\n").on("ps", "-o", "ppid=", out: "1\n")
-
-    assert_equal "", @notifier.iterm_tty
-  end
-
-  def test_iterm_tty_is_empty_when_no_ancestor_has_a_tty
-    @fake.on("ps", "-o", "tty=", out: "??\n")
-         .on("ps", "-o", "comm=", out: "gh-csd\n").on("ps", "-o", "ppid=", out: "200\n")
-         .on("ps", "-o", "tty=", out: "??\n")
-         .on("ps", "-o", "comm=", out: "/Applications/iTerm.app/Contents/MacOS/iTermServer\n")
-
-    assert_equal "", @notifier.iterm_tty
+    assert_equal({ "cs-a" => "Available", "cs-b" => "Shutdown" }, @codespace.states(csd_settings({})))
+    assert_includes @fake.calls.first, "me/my-app"
   end
 end

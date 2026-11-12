@@ -79,7 +79,7 @@ end
 
 class SettingsTest < Minitest::Test
   def test_built_in_defaults_name_no_repo
-    settings = Csd::Settings.new({}, "/", TEST_EXE, config: {}, repo: "me/my-app")
+    settings = Csd::Settings.new({}, "/", config: {}, repo: "me/my-app")
 
     assert_equal ".devcontainer/devcontainer.json", settings.devcontainer
     assert_equal "/workspaces/my-app", settings.remote_dir
@@ -88,61 +88,73 @@ class SettingsTest < Minitest::Test
   end
 
   def test_machine_has_no_default
-    error = assert_raises(Csd::Error) { Csd::Settings.new({ "HOME" => "/h" }, "/", TEST_EXE, config: {}).machine }
-    assert_match "set machine in /h/.config/gh-csd/config.yml, or CS_MACHINE", error.message
+    assert_equal "", Csd::Settings.new({}, "/", config: {}).machine
   end
 
-  def test_env_beats_config_beats_default
+  def test_flag_beats_config_beats_default
     config = { "machine" => "from-config" }
 
-    assert_equal "env", csd_settings({ "CS_MACHINE" => "env" }, "/", config).machine
+    assert_equal "flag", csd_settings({}, "/", config, { "machine" => "flag" }).machine
     assert_equal "from-config", csd_settings({}, "/", config).machine
     assert_equal "master", csd_settings({}, "/", config).branch
   end
 
-  def test_an_empty_env_var_does_not_override
-    assert_equal "from-config", csd_settings({ "CS_MACHINE" => "" }, "/", { "machine" => "from-config" }).machine
+  def test_environment_variables_no_longer_override
+    assert_equal "from-config", csd_settings({ "CS_MACHINE" => "env" }, "/", { "machine" => "from-config" }).machine
+  end
+
+  def test_a_chosen_machine_beats_the_config
+    settings = csd_settings({}, "/", { "machine" => "from-config" })
+    settings.machine = "chosen"
+
+    assert_equal "chosen", settings.machine
   end
 
   def test_ready_check_none_means_no_wait
-    assert_equal "", csd_settings({ "CS_READY_CHECK" => "none" }).ready_check
     assert_equal "", csd_settings({}, "/", { "ready_check" => "none" }).ready_check
-    assert_equal "pg_isready", csd_settings({ "CS_READY_CHECK" => "pg_isready" }).ready_check
+    assert_equal "pg_isready", csd_settings({}, "/", { "ready_check" => "pg_isready" }).ready_check
   end
 
-  def test_default_permissions_reads_strings_from_yaml_and_env
+  def test_default_permissions_reads_strings_from_yaml_and_flags
     assert csd_settings({}, "/", { "default_permissions" => "true" }).default_permissions?
     refute csd_settings({}, "/", { "default_permissions" => "false" }).default_permissions?
-    assert csd_settings({ "CS_DEFAULT_PERMISSIONS" => "1" }).default_permissions?
-    refute csd_settings({ "CS_DEFAULT_PERMISSIONS" => "false" }).default_permissions?
+    assert csd_settings({}, "/", {}, { "default_permissions" => "true" }).default_permissions?
+  end
+
+  def test_codespace_and_takeover_come_from_flags
+    settings = csd_settings({}, "/", {}, { "codespace" => "cs1", "takeover" => "true" })
+
+    assert_equal "cs1", settings.codespace
+    assert settings.takeover?
+    refute csd_settings({}).takeover?
   end
 
   def test_reads_the_config_file_when_not_given_one
     Dir.mktmpdir do |dir|
       File.write("#{dir}/c.yml", "repos:\n  me/my-app:\n    machine: from-file\n")
 
-      assert_equal "from-file", Csd::Settings.new({ "GH_CSD_CONFIG" => "#{dir}/c.yml" }, "/", TEST_EXE, repo: "me/my-app").machine
+      assert_equal "from-file", Csd::Settings.new({ "GH_CSD_CONFIG" => "#{dir}/c.yml" }, "/", repo: "me/my-app").machine
     end
   end
 
   def test_branch_falls_back_to_origins_default_then_main
-    assert_equal "trunk", Csd::Settings.new({}, "/", TEST_EXE, config: {}, default_branch: "trunk").branch
-    assert_equal "main", Csd::Settings.new({}, "/", TEST_EXE, config: {}).branch
-    assert_equal "from-config", Csd::Settings.new({}, "/", TEST_EXE, config: { "branch" => "from-config" }, default_branch: "trunk").branch
+    assert_equal "trunk", Csd::Settings.new({}, "/", config: {}, default_branch: "trunk").branch
+    assert_equal "main", Csd::Settings.new({}, "/", config: {}).branch
+    assert_equal "from-config", Csd::Settings.new({}, "/", config: { "branch" => "from-config" }, default_branch: "trunk").branch
   end
 
   def test_for_checkout_reads_the_origin_remote
     runner = FakeRunner.new
     runner.on("git", "-C", "/src/x", "remote", out: "git@github.com:me/repo.git\n")
     runner.on("git", "-C", "/src/x", "symbolic-ref", out: "origin/trunk\n")
-    settings = Csd::Settings.for_checkout({ "GH_CSD_CONFIG" => "/none.yml" }, "/src/x", TEST_EXE, runner)
+    settings = Csd::Settings.for_checkout({ "GH_CSD_CONFIG" => "/none.yml" }, "/src/x", {}, runner)
 
     assert_equal "me/repo", settings.repo
     assert_equal "trunk", settings.branch
   end
 
   def test_repo_without_a_github_origin_is_a_clear_error
-    error = assert_raises(Csd::Error) { Csd::Settings.new({}, "/src/x", TEST_EXE, config: {}).repo }
+    error = assert_raises(Csd::Error) { Csd::Settings.new({}, "/src/x", config: {}).repo }
     assert_match "no github.com origin remote in /src/x", error.message
   end
 end

@@ -32,13 +32,5 @@ module Csd
       system(*cmd)
       $?.exitstatus
     end
-
-    # Outlives gh-csd, for the notification watcher.
-    #: (Array[String]) -> Integer
-    def spawn_detached(cmd)
-      pid = Process.spawn(*cmd, out: File::NULL, err: File::NULL)
-      Process.detach(pid)
-      pid
-    end
   end
 end

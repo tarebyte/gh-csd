@@ -41,13 +41,13 @@ tmp = "/tmp/gh-csd-smoke"
 Dir.mkdir(tmp) unless Dir.exist?(tmp)
 File.delete("#{tmp}/gh-csd-smoke.ssh") if File.exist?("#{tmp}/gh-csd-smoke.ssh")
 scripted = ScriptedRunner.new
-remote = Csd::Remote.new(scripted, "smoke", Csd::Settings.new({ "TMPDIR" => tmp, "HOME" => "/Users/me" }, "/", "/bin/gh-csd", config: { "machine" => "smoke-machine" }, repo: "me/my-app", default_branch: "master"))
+remote = Csd::Remote.new(scripted, "smoke", Csd::Settings.new({ "TMPDIR" => tmp, "HOME" => "/Users/me" }, "/", config: { "machine" => "smoke-machine" }, repo: "me/my-app", default_branch: "master"))
 puts "remote host=#{remote.host}"
 remote.run(["bin/test", "test/a b.rb"])
 remote.copy(["a.rb", "dir/b c.rb"], "/src")
 scripted.calls.each { |call| puts "remote call=#{call.sub(tmp, "TMP")}" }
 begin
-  Csd::Remote.new(scripted, "smoke", Csd::Settings.new({ "TMPDIR" => tmp, "HOME" => "/Users/my name" }, "/", "/bin/gh-csd", config: { "machine" => "smoke-machine" }, repo: "me/my-app", default_branch: "master")).rsync_shell
+  Csd::Remote.new(scripted, "smoke", Csd::Settings.new({ "TMPDIR" => tmp, "HOME" => "/Users/my name" }, "/", config: { "machine" => "smoke-machine" }, repo: "me/my-app", default_branch: "master")).rsync_shell
 rescue Csd::Error => e
   puts "remote error=#{e.message.sub(tmp, "TMP")}"
 end
@@ -127,13 +127,13 @@ class FlakyRunner < Csd::Runner
 end
 
 Dir.mkdir(tmp)
-flaky = Csd::Remote.new(FlakyRunner.new, "flaky", Csd::Settings.new({ "TMPDIR" => tmp, "HOME" => "/h" }, "/", "/bin/gh-csd", config: { "machine" => "smoke-machine" }, repo: "me/my-app", default_branch: "master"))
+flaky = Csd::Remote.new(FlakyRunner.new, "flaky", Csd::Settings.new({ "TMPDIR" => tmp, "HOME" => "/h" }, "/", config: { "machine" => "smoke-machine" }, repo: "me/my-app", default_branch: "master"))
 clock.reset
 puts "remote file_after_startup=#{waiter.wait(1200, 15) { flaky.file?("~/ready") }} at=#{clock.now.to_i}"
 File.delete("#{tmp}/gh-csd-flaky.ssh")
 Dir.rmdir(tmp)
 
-# Codespace create through the approval flow, and Notifier quoting.
+# Codespace create through the approval flow.
 class ApprovalRunner < Csd::Runner
   attr_reader :calls
 
@@ -162,10 +162,9 @@ end
 approvals = ApprovalRunner.new
 clock.reset
 codespace = Csd::Codespace.new(approvals, Csd::Notifier.new(approvals), waiter)
-puts "codespace created=#{codespace.create("me/" + "x" * 60, Csd::Settings.new({}, "/", "/bin/gh-csd", config: { "machine" => "smoke-machine" }, repo: "me/my-app", default_branch: "master"))} waited=#{clock.now.to_i}"
+puts "codespace created=#{codespace.create("me/" + "x" * 60, Csd::Settings.new({}, "/", config: { "machine" => "smoke-machine" }, repo: "me/my-app", default_branch: "master"))} waited=#{clock.now.to_i}"
 puts "codespace exist=#{codespace.exist?("smoke-cs-123")}"
 codespace.delete("smoke-cs-123")
-Csd::Notifier.new(approvals).notify("gh csd: ready", "say \"hi\" \\ bye")
 approvals.calls.each { |call| puts "codespace call=#{call}" }
 
 # Commands: up, run, and down against real git, with gh and ssh scripted.
@@ -194,10 +193,6 @@ class CommandRunner < Csd::Runner
     7
   end
 
-  def spawn_detached(cmd)
-    @calls << cmd.join(" ")
-    1
-  end
 end
 
 root = "/tmp/gh-csd-smoke-cmd"
@@ -212,12 +207,15 @@ cmd_runner = CommandRunner.new
 clock.reset
 cmd_waiter = waiter
 cmd_env = { "TMPDIR" => root, "HOME" => "/Users/me" }
-cmds = Csd::Commands.new(cmd_runner, cmd_waiter, Csd::Settings.new(cmd_env, "#{root}/my-app", "/bin/gh-csd", config: { "machine" => "smoke-machine" }, repo: "me/my-app", default_branch: "master"))
+no_prompt = Csd::Prompt.new($stdin, $stdout, false)
+cmds = Csd::Commands.new(cmd_runner, cmd_waiter, Csd::Settings.new(cmd_env, "#{root}/my-app", config: { "machine" => "smoke-machine" }, repo: "me/my-app", default_branch: "master"), no_prompt)
 cmds.up("me/feature")
 puts "commands up=done"
 wt_path = "#{root}/my-app-me-feature"
 File.write("#{wt_path}/new.rb", "1")
-puts "commands run=#{Csd::Commands.new(cmd_runner, cmd_waiter, Csd::Settings.new(cmd_env, wt_path, "/bin/gh-csd", config: { "machine" => "smoke-machine" }, repo: "me/my-app", default_branch: "master")).run(["bin/test"])}"
+puts "commands run=#{Csd::Commands.new(cmd_runner, cmd_waiter, Csd::Settings.new(cmd_env, wt_path, config: { "machine" => "smoke-machine" }, repo: "me/my-app", default_branch: "master"), no_prompt).run(["bin/test"])}"
+cmds.status("branch,codespace,state")
+cmds.status
 begin
   cmds.down("me/feature")
 rescue Csd::Error => e
@@ -235,12 +233,12 @@ Dir.mkdir(cfg_dir)
 puts "config path=#{Csd::Config.path({ "XDG_CONFIG_HOME" => "/xdg", "HOME" => "/h" })} home=#{Csd::Config.path({ "HOME" => "/h" })}"
 puts "config missing=#{Csd::Config.load({ "GH_CSD_CONFIG" => "#{cfg_dir}/none.yml" }, "me/my-app").inspect}"
 File.write("#{cfg_dir}/c.yml", "machine: top\ndefault_permissions: true\nrepos:\n  me/my-app:\n    machine: repo\n    ready_check: none\n")
-from_file = Csd::Settings.new({ "GH_CSD_CONFIG" => "#{cfg_dir}/c.yml" }, "/", "/bin/gh-csd", repo: "me/my-app", default_branch: "master")
+from_file = Csd::Settings.new({ "GH_CSD_CONFIG" => "#{cfg_dir}/c.yml" }, "/", repo: "me/my-app", default_branch: "master")
 puts "settings machine=#{from_file.machine} ready_check=#{from_file.ready_check.inspect} perms=#{from_file.default_permissions?} branch=#{from_file.branch}"
-overridden = Csd::Settings.new({ "GH_CSD_CONFIG" => "#{cfg_dir}/c.yml", "CS_MACHINE" => "env" }, "/", "/bin/gh-csd", repo: "me/my-app")
-puts "settings env_machine=#{overridden.machine}"
+overridden = Csd::Settings.new({ "GH_CSD_CONFIG" => "#{cfg_dir}/c.yml", "CS_MACHINE" => "env" }, "/", flags: { "machine" => "flag", "takeover" => "true" }, repo: "me/my-app")
+puts "settings flag_machine=#{overridden.machine} takeover=#{overridden.takeover?}"
 puts "config repo=#{Csd::Config.repo_from("git@github.com:me/my.repo.git")} none=#{Csd::Config.repo_from("git@gitlab.com:me/r.git").inspect}"
-puts "settings default_check=#{Csd::Settings.new({}, "/", "/bin/gh-csd", config: {}).ready_check}"
+puts "settings default_check=#{Csd::Settings.new({}, "/", config: {}).ready_check}"
 File.write("#{cfg_dir}/bad.yml", "- a\n- b\n")
 begin
   Csd::Config.load({ "GH_CSD_CONFIG" => "#{cfg_dir}/bad.yml" }, "me/my-app")
@@ -249,32 +247,9 @@ rescue Csd::Error => e
 end
 system("rm", "-rf", cfg_dir)
 
-# Notifier: OSC 9 to a tty file, the osascript fallback, and iTerm2 detection.
-class PsRunner < Csd::Runner
-  attr_reader :calls
-
-  def initialize(chain)
-    @chain = chain
-    @calls = []
-  end
-
-  def capture(cmd, stdin: "")
-    @calls << cmd.join(" ").sub(/-p \d+\z/, "-p PID")
-    return Csd::Result.new(@chain.shift.to_s + "\n", "", 0) if cmd[0] == "ps"
-
-    Csd::Result.new("", "", 0)
-  end
+# Cli: commands, flags, words, help, and errors.
+[["up", "-m", "small", "--default-permissions", "me/x"], ["run", "-c", "cs1", "bin/test", "-v"],
+ ["run", "--", "--help"], ["status", "--json", "branch"], ["down", "-f"], ["up", "--nope"], ["nope"], ["up", "-h"], []].each do |args|
+  parsed = Csd::Cli.new(args)
+  puts "cli #{args.join(" ")}: command=#{parsed.command} words=#{parsed.words.join(",")} flags=#{parsed.flags.keys.sort.map { |k| "#{k}=#{parsed.flags[k]}" }.join(",")} help=#{parsed.help?} error=#{parsed.error}"
 end
-
-tty_file = "/tmp/gh-csd-smoke-tty"
-File.write(tty_file, "")
-Csd::Notifier.new(PsRunner.new([])).notify("gh csd: ready", "done in cs1\a", tty: tty_file)
-puts "notifier osc9=#{File.read(tty_file).inspect}"
-File.delete(tty_file)
-fallback = PsRunner.new([])
-Csd::Notifier.new(fallback).notify("gh csd: ready", "done", tty: "/dev/no-such-tty")
-puts "notifier fallback=#{fallback.calls.inspect}"
-puts "notifier iterm=#{Csd::Notifier.new(PsRunner.new(["ttys003", "gh-csd", "200", "/Applications/iTerm.app/Contents/MacOS/iTermServer"])).iterm_tty}"
-puts "notifier not_iterm=#{Csd::Notifier.new(PsRunner.new(["ttys003", "gh-csd", "200", "ghostty", "1"])).iterm_tty.inspect}"
-puts "notifier no_tty=#{Csd::Notifier.new(PsRunner.new(["??", "gh-csd", "200", "??", "iTermServer"])).iterm_tty.inspect}"
-puts "notifier ancestor_tty=#{Csd::Notifier.new(PsRunner.new(["??", "gh-csd", "150", "ttys003", "claude", "300", "iTermServer"])).iterm_tty}"

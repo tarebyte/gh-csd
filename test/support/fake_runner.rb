@@ -44,12 +44,6 @@ class FakeRunner
     reply_for(cmd).status
   end
 
-  def spawn_detached(cmd)
-    @calls << cmd
-    @stdins << ""
-    4242
-  end
-
   # What the first recorded command matching the block received on stdin.
   def stdin_of
     index = @calls.index { |cmd| yield cmd }

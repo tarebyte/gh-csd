@@ -16,8 +16,7 @@ module Csd
     # base is the branch on origin that new worktrees start from.
     #: (Runner, String, String, String) -> Worktree
     def self.for_branch(runner, branch, cwd, base)
-      common = git(runner, cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"])
-      main = common.sub(%r{/\.git\z}, "")
+      main = main_of(runner, cwd)
       path = existing_path(runner, main, branch)
       path = "#{main}-#{branch.tr("/", "-")}" if path.empty?
       new(runner, path, base, branch, main)
@@ -28,12 +27,47 @@ module Csd
     #: (Runner, String, String) -> String
     def self.existing_path(runner, main, branch)
       found = ""
+      linked(runner, main).each { |path, name| found = path if name == branch }
+      found
+    end
+
+    # [path, branch] of every linked worktree (not the main checkout), in
+    # git's order; branch is "" when detached.
+    #: (Runner, String) -> Array[Array[String]]
+    def self.linked(runner, main)
+      found = []
       git(runner, main, ["worktree", "list", "--porcelain"]).split("\n\n").each do |entry|
         lines = entry.split("\n")
         path = lines[0].to_s.sub(/\Aworktree /, "")
-        found = path if path != main && lines.include?("branch refs/heads/#{branch}")
+        ref = lines.find { |line| line.start_with?("branch ") }.to_s
+        found << [path, ref.sub(%r{\Abranch refs/heads/}, "")] unless path == main
       end
       found
+    end
+
+    # The linked worktree at cwd, for up and down without a branch.
+    #: (Runner, String, String) -> Worktree
+    def self.here(runner, cwd, base)
+      top = git(runner, cwd, ["rev-parse", "--show-toplevel"])
+      branch = git(runner, cwd, ["branch", "--show-current"])
+      raise Error, "#{top} has no branch checked out; pass a branch" if branch.empty?
+
+      tree = for_branch(runner, branch, cwd, base)
+      raise Error, "#{top} is the main checkout; pass a branch, or run from a worktree" unless tree.path == top
+
+      tree
+    end
+
+    # Every linked worktree of the checkout at cwd, for status.
+    #: (Runner, String, String) -> Array[Worktree]
+    def self.all(runner, cwd, base)
+      main = main_of(runner, cwd)
+      linked(runner, main).map { |path, branch| new(runner, path.to_s, base, branch.to_s, main) }
+    end
+
+    #: (Runner, String) -> String
+    def self.main_of(runner, cwd)
+      git(runner, cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).sub(%r{/\.git\z}, "")
     end
 
     #: (Runner, String, String) -> Worktree
@@ -92,14 +126,17 @@ module Csd
       File.join(git(@path, ["rev-parse", "--absolute-git-dir"]), STATUS)
     end
 
-    # "" clears it. A class method too, for the watcher, which has only the path.
-    #: (String) -> void
-    def status=(phase)
-      Worktree.write_status(status_path, phase)
+    # What up is doing with the codespace ("" when nothing). status shows it.
+    #: () -> String
+    def phase
+      path = status_path
+      File.exist?(path) ? File.read(path).strip : ""
     end
 
-    #: (String, String) -> void
-    def self.write_status(path, phase)
+    # "" clears it.
+    #: (String) -> void
+    def status=(phase)
+      path = status_path
       return File.write(path, "#{phase}\n") unless phase.empty?
 
       File.delete(path) if File.exist?(path)

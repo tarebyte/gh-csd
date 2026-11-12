@@ -2,9 +2,12 @@
 
 Edit a GitHub repo in a local worktree, and run it in that worktree's own codespace.
 
-- `gh csd up <branch>` makes a worktree next to your main checkout (`~/src/my-app` → `~/src/my-app-<branch>`) and a codespace for it. If the branch already has a worktree somewhere else, for example one that another tool made, `up` uses that worktree.
+- `gh csd up` makes a codespace for the worktree you are in. `gh csd up <branch>` uses that branch's worktree, or makes one next to your main checkout (`~/src/my-app` → `~/src/my-app-<branch>`).
 - `gh csd run <command>` copies the worktree's changes to the codespace with rsync, then runs the command there over SSH.
-- `gh csd down <branch>` deletes the codespace, the worktree, and the branch.
+- `gh csd status` lists each worktree and its codespace. Add `--json <fields>` for scripts.
+- `gh csd down` deletes the codespace, the worktree, and the branch.
+
+The codespace checks out the base branch (origin's default branch). `run` copies your changes on top of it; it never checks out your branch there.
 
 Each worktree has its own codespace, so you can work on several branches at once.
 
@@ -25,7 +28,7 @@ gh extension install tarebyte/gh-csd
 
 Upgrade later with `gh extension upgrade csd`.
 
-### 2. Create a config file
+### 2. Optional: create a config file
 
 ```sh
 gh csd init
@@ -33,13 +36,7 @@ gh csd init
 
 `init` writes a commented template to `~/.config/gh-csd/config.yml`. It does not overwrite a file that is already there.
 
-Open the file and set `machine`, the codespace machine type. `up` does not start without it. To list the machine types for a repo, run:
-
-```sh
-gh api repos/<owner/name>/codespaces/machines --jq '.machines[].name'
-```
-
-For every setting, see [docs/configuration.md](docs/configuration.md).
+Set `machine` there to skip the machine type question. Without it, `up` asks in a terminal, or takes `-m <machine>`. For every setting, see [docs/configuration.md](docs/configuration.md).
 
 ### 3. Mark when your dotfiles are ready
 
@@ -55,9 +52,12 @@ cd ../my-app-my-feature
 # ...edit files locally...
 gh csd run bin/test test/user_test.rb
 gh csd run                        # sync only
-gh csd down my-feature            # refuses if the branch has unsaved work
-gh csd down --force my-feature    # deletes it anyway
+gh csd status                     # each worktree, its codespace, and its state
+gh csd down                       # asks, then deletes this worktree's codespace, worktree, and branch
+gh csd down --force my-feature    # deletes it even with unsaved work
 ```
+
+Already in a worktree, for example one your editor or another tool made? Run `gh csd up` there. Use `gh csd <command> --help` for every flag.
 
 If the devcontainer asks for extra repository permissions, the first `up` opens your browser to approve them. `up` continues after you approve.
 

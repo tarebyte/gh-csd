@@ -1,13 +1,12 @@
 require_relative "test_helper"
 
 # Runs whole commands: real git in a throwaway repo, and a fake for gh, ssh,
-# rsync, hostname, open, and osascript.
+# rsync, hostname, and open.
 class CommandsTest < Minitest::Test
   include GitRepo
 
   CONFIG = "Host cs.test.master\n"
   CHECK = "nc -z localhost 5432"
-  EXE = TEST_EXE
 
   def setup
     setup_repo
@@ -20,8 +19,10 @@ class CommandsTest < Minitest::Test
     teardown_repo
   end
 
-  def commands(env = {}, cwd = @main)
-    Csd::Commands.new(@fake, @waiter, csd_settings({ "TMPDIR" => @root, "HOME" => "/Users/me", "CS_READY_CHECK" => CHECK }.merge(env), cwd))
+  def commands(env = {}, cwd = @main, flags: {}, config: {}, prompt: csd_prompt(interactive: false))
+    settings = csd_settings({ "TMPDIR" => @root, "HOME" => "/Users/me" }.merge(env), cwd,
+                            { "machine" => "test-machine", "ready_check" => CHECK }.merge(config), flags)
+    Csd::Commands.new(@fake, @waiter, settings, prompt)
   end
 
   def tree(branch)
@@ -41,8 +42,8 @@ class CommandsTest < Minitest::Test
     assert wt.exist?
     assert_equal "cs-new", wt.codespace
     assert_equal 15, @clock.now, "polls again after the first ready check fails"
-    assert_equal [[EXE, "__watch", "cs-new", "", wt.status_path]], @fake.calls_matching(EXE)
-    assert_equal "dotfiles…\n", File.read(wt.status_path), "the watcher clears it later"
+    refute File.exist?(wt.status_path), "cleared once up is done"
+    refute(@fake.ssh_scripts.any? { |script| script.include?("setup-complete") }, "no dotfiles wait without -s")
     assert_includes @fake.ssh_scripts, "echo :#{wt.path} > /workspaces/my-app/.git/cs-dev-owner"
     assert_includes out, "gh csd: ready  worktree=#{wt.path}  codespace=cs-new"
     assert_includes err, "copied 0, deleted 0, reset 0"
@@ -66,7 +67,6 @@ class CommandsTest < Minitest::Test
     assert_includes err, "reusing worktree"
     assert_includes err, "reusing codespace cs-old"
     assert_empty @fake.calls_matching("gh", "codespace", "create")
-    assert_empty @fake.calls_matching(EXE), "no watcher for a reused codespace"
   end
 
   def test_up_replaces_a_bound_codespace_that_is_gone
@@ -99,7 +99,7 @@ class CommandsTest < Minitest::Test
   def test_up_with_ready_check_none_skips_the_services_wait
     @fake.on("gh", "codespace", "create", out: "cs-new\n").on("gh", "codespace", "ssh", "--config", out: CONFIG)
 
-    _, err = capture_io { commands("CS_READY_CHECK" => "none").up("me/feature") }
+    _, err = capture_io { commands(config: { "ready_check" => "none" }).up("me/feature") }
 
     refute_includes err, "waiting for services"
     refute(@fake.ssh_scripts.any? { |script| script.include?("nc -z") })
@@ -127,14 +127,14 @@ class CommandsTest < Minitest::Test
 
     assert_includes err, "waiting for services..."
     assert_equal 2, @fake.ssh_scripts.count(CHECK)
-    refute File.exist?(wt.status_path), "clears the status a reused codespace never hands to a watcher"
+    refute File.exist?(wt.status_path)
   end
 
   def test_up_passes_settings_to_create
     @fake.on("gh", "codespace", "create", out: "cs-new\n").on("gh", "codespace", "ssh", "--config", out: CONFIG)
 
     capture_io do
-      commands("CS_MACHINE" => "big-machine", "CS_DEFAULT_PERMISSIONS" => "1").up("me/feature")
+      commands(flags: { "machine" => "big-machine", "default_permissions" => "true" }).up("me/feature")
     end
 
     cmd = @fake.calls_matching("gh", "codespace", "create").first
@@ -148,7 +148,7 @@ class CommandsTest < Minitest::Test
     @fake.passthrough("mkdir")
     path = "#{@root}/config/gh-csd/config.yml"
 
-    _, err = capture_io { commands("GH_CSD_CONFIG" => path).init }
+    _, err = capture_io { commands({ "GH_CSD_CONFIG" => path }).init }
 
     assert_includes err, "wrote #{path}"
     assert_equal Csd::Config::TEMPLATE, File.read(path)
@@ -159,7 +159,7 @@ class CommandsTest < Minitest::Test
     path = "#{@root}/config.yml"
     File.write(path, "machine: mine\n")
 
-    error = assert_raises(Csd::Error) { commands("GH_CSD_CONFIG" => path).init }
+    error = assert_raises(Csd::Error) { commands({ "GH_CSD_CONFIG" => path }).init }
     assert_match "already exists", error.message
     assert_equal "machine: mine\n", File.read(path)
   end
@@ -208,7 +208,7 @@ class CommandsTest < Minitest::Test
     @fake.on("gh", "codespace", "ssh", "--config", out: CONFIG)
          .on_ssh("cat ", out: "other-mac:/src/github-other\n")
 
-    error = assert_raises(Csd::Error) { commands({ "CS" => "cs-taken" }, wt.path).run([]) }
+    error = assert_raises(Csd::Error) { commands({}, wt.path, flags: { "codespace" => "cs-taken" }).run([]) }
 
     assert_match "in use by other-mac:/src/github-other", error.message
     assert_nil wt.codespace
@@ -220,7 +220,7 @@ class CommandsTest < Minitest::Test
     @fake.on("gh", "codespace", "ssh", "--config", out: CONFIG)
          .on_ssh("cat ", out: "other-mac:/src/github-other\n")
 
-    capture_io { commands({ "CS" => "cs-taken", "CS_TAKEOVER" => "1" }, wt.path).run([]) }
+    capture_io { commands({}, wt.path, flags: { "codespace" => "cs-taken", "takeover" => "true" }).run([]) }
 
     assert_equal "cs-taken", wt.codespace
   end
@@ -282,30 +282,118 @@ class CommandsTest < Minitest::Test
     assert_raises(Csd::Error) { commands.down("me/nothing") }
   end
 
-  # --- watch ---
+  def test_down_without_a_branch_asks_then_deletes_the_worktree_it_runs_in
+    wt = tree("me/feature").tap(&:create)
 
-  def test_watch_notifies_once_dotfiles_are_done_and_clears_the_status
-    @fake.on("gh", "codespace", "ssh", "--config", out: CONFIG)
-         .on_ssh("test -f ~/.local/state/gh-csd/setup-complete", status: 1)
-    File.write("#{@root}/status", "dotfiles…\n")
+    capture_io { commands({}, wt.path, prompt: csd_prompt("y\n")).down("") }
 
-    commands.watch("cs1", "", "#{@root}/status")
-
-    assert_equal 30, @clock.now
-    notify = @fake.calls_matching("osascript").first
-    assert_includes notify.last, "Dotfiles setup finished in cs1"
-    refute File.exist?("#{@root}/status")
+    refute wt.exist?
   end
 
-  def test_watch_gives_up_quietly_after_30_minutes_and_clears_the_status
-    @fake.on("gh", "codespace", "ssh", "--config", status: 1)
-    61.times { @fake.on("gh", "codespace", "ssh", "--config", status: 1) }
-    File.write("#{@root}/status", "dotfiles…\n")
+  def test_down_without_a_branch_stops_on_no
+    wt = tree("me/feature").tap(&:create)
 
-    commands.watch("cs1", "", "#{@root}/status")
+    error = assert_raises(Csd::Error) { commands({}, wt.path, prompt: csd_prompt("\n")).down("") }
+    assert_match "cancelled", error.message
+    assert wt.exist?
+  end
 
-    assert_equal 1800, @clock.now
-    assert_empty @fake.calls_matching("osascript")
-    refute File.exist?("#{@root}/status")
+  def test_down_without_a_branch_needs_a_terminal
+    wt = tree("me/feature").tap(&:create)
+
+    error = assert_raises(Csd::Error) { commands({}, wt.path).down("") }
+    assert_match "pass the branch", error.message
+    assert wt.exist?
+  end
+
+  # --- up without a branch ---
+
+  def test_up_without_a_branch_uses_the_worktree_it_runs_in
+    elsewhere = "#{@root}/elsewhere/me-feature"
+    sh("git", "-C", @main, "worktree", "add", "-q", "-b", "me/feature", elsewhere, "origin/master")
+    @fake.on("gh", "codespace", "create", out: "cs-new\n").on("gh", "codespace", "ssh", "--config", out: CONFIG)
+
+    _, err = capture_io { commands({}, elsewhere).up("") }
+
+    assert_includes err, "reusing worktree #{elsewhere}"
+    assert_includes @fake.calls_matching("gh", "codespace", "create").first, "me/feature"
+    assert_equal "cs-new", Csd::Worktree.current(Csd::Runner.new, elsewhere, "master").codespace
+  end
+
+  def test_up_without_a_branch_refuses_the_main_checkout
+    error = assert_raises(Csd::Error) { commands.up("") }
+    assert_match "main checkout", error.message
+  end
+
+  # --- machine ---
+
+  def test_up_picks_the_only_machine_type_without_asking
+    @fake.on("gh", "api", out: "only-one\n").on("gh", "codespace", "create", out: "cs-new\n")
+         .on("gh", "codespace", "ssh", "--config", out: CONFIG)
+
+    capture_io { commands(config: { "machine" => "" }).up("me/feature") }
+
+    assert_includes @fake.calls_matching("gh", "codespace", "create").first, "only-one"
+  end
+
+  def test_up_asks_for_the_machine_type_in_a_terminal
+    @fake.on("gh", "api", out: "small\nbig\n").on("gh", "codespace", "create", out: "cs-new\n")
+         .on("gh", "codespace", "ssh", "--config", out: CONFIG)
+
+    capture_io { commands(config: { "machine" => "" }, prompt: csd_prompt("2\n")).up("me/feature") }
+
+    assert_includes @fake.calls_matching("gh", "codespace", "create").first, "big"
+  end
+
+  def test_up_without_a_terminal_names_the_machine_types
+    @fake.on("gh", "api", out: "small\nbig\n")
+
+    error = assert_raises(Csd::Error) { capture_io { commands(config: { "machine" => "" }).up("me/feature") } }
+
+    assert_equal "pass -m with one of: small, big", error.message
+    assert_empty @fake.calls_matching("gh", "codespace", "create")
+  end
+
+  # --- -s ---
+
+  def test_up_status_waits_for_the_dotfiles_to_finish
+    @fake.on("gh", "codespace", "create", out: "cs-new\n").on("gh", "codespace", "ssh", "--config", out: CONFIG)
+         .on_ssh("setup-complete", status: 1)
+
+    _, err = capture_io { commands(config: { "ready_check" => "none" }).up("me/feature", status: true) }
+
+    assert_includes err, "waiting for the dotfiles to finish..."
+    assert_includes err, "dotfiles finished"
+    assert_equal 30, @clock.now, "polls again after the first check fails"
+    refute File.exist?(tree("me/feature").status_path)
+  end
+
+  # --- status ---
+
+  def test_status_lists_each_worktree_with_its_codespace_and_state
+    one = tree("me/one").tap(&:create)
+    one.bind("cs-one")
+    tree("me/two").create
+    @fake.on("gh", "codespace", "list", out: "cs-one Available\n")
+
+    out, = capture_io { commands.status }
+
+    assert_equal "me/one\tcs-one\tAvailable\t\t#{one.path}\nme/two\t\t\t\t#{@main}-me-two\n", out
+  end
+
+  def test_status_json_prints_the_chosen_fields
+    tree("me/one").tap(&:create).bind("cs-gone")
+    @fake.on("gh", "codespace", "list", out: "")
+
+    out, = capture_io { commands.status("branch,base,state") }
+
+    assert_equal [{ "branch" => "me/one", "base" => "master", "state" => "Deleted" }], JSON.parse(out)
+  end
+
+  def test_status_json_rejects_unknown_fields
+    @fake.on("gh", "codespace", "list", out: "")
+
+    error = assert_raises(Csd::UsageError) { commands.status("branch,nope") }
+    assert_match "unknown JSON field nope", error.message
   end
 end

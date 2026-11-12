@@ -41,7 +41,7 @@ module Csd
     def refuse_if_taken(owner, me)
       return if owner.empty? || owner == me || @takeover
 
-      raise Error, "#{@remote.codespace} is in use by #{owner}; use another codespace or set CS_TAKEOVER=1"
+      raise Error, "#{@remote.codespace} is in use by #{owner}; use another codespace, or pass --takeover"
     end
 
     #: (Worktree) -> ChangeSet

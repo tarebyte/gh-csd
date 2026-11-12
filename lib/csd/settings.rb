@@ -1,54 +1,46 @@
 module Csd
   # gh csd's settings. Each comes from the first of these that sets it:
   #
-  #   1. an environment variable (for one-off overrides)
+  #   1. a flag
   #   2. the config file (Config: the repo's section over the top level)
   #   3. the built-in default
   #
-  #   config key            environment variable     default
-  #   machine               CS_MACHINE               none: up requires it
-  #   devcontainer          CS_DEVCONTAINER          .devcontainer/devcontainer.json
-  #   default_permissions   CS_DEFAULT_PERMISSIONS   false
-  #   dir                   REMOTE_DIR               /workspaces/<repo name>
-  #   branch                                         origin's default branch, else main
-  #   ready_check           CS_READY_CHECK           none: no services wait
+  #   config key            flag                    default
+  #   machine               -m, --machine           none: up asks in a terminal
+  #   devcontainer          --devcontainer-path     .devcontainer/devcontainer.json
+  #   default_permissions   --default-permissions   false
+  #   dir                                           /workspaces/<repo name>
+  #   branch                                        origin's default branch, else main
+  #   ready_check                                   none: no services wait
   #
-  # Environment only: CS (codespace for run), CS_TAKEOVER (claim a codespace
-  # another worktree owns), GH_CSD_CONFIG (config file path).
+  # Flags only: codespace (-c, for run) and takeover (claim a codespace
+  # another worktree owns). The environment only locates files:
+  # GH_CSD_CONFIG, XDG_CONFIG_HOME, TMPDIR, HOME.
   class Settings
     DEFAULTS = {
       "devcontainer" => ".devcontainer/devcontainer.json",
       "default_permissions" => "false"
     }.freeze
 
-    ENV_NAMES = {
-      "machine" => "CS_MACHINE",
-      "devcontainer" => "CS_DEVCONTAINER",
-      "default_permissions" => "CS_DEFAULT_PERMISSIONS",
-      "dir" => "REMOTE_DIR",
-      "ready_check" => "CS_READY_CHECK"
-    }.freeze
+    KEYS = %w[GH_CSD_CONFIG XDG_CONFIG_HOME TMPDIR HOME].freeze
 
-    KEYS = (ENV_NAMES.values + %w[CS CS_TAKEOVER GH_CSD_CONFIG XDG_CONFIG_HOME TMPDIR HOME]).freeze
-
-    # exe is this binary, which up starts again as the background watcher.
-    attr_reader :cwd, :exe #: String
+    attr_reader :cwd #: String
 
     # Settings for the checkout at cwd, with its origin's repo and default
     # branch ("" for each outside a checkout or without an origin).
-    #: (Hash[String, String], String, String, Runner) -> Settings
-    def self.for_checkout(env, cwd, exe, runner)
+    #: (Hash[String, String], String, Hash[String, String], Runner) -> Settings
+    def self.for_checkout(env, cwd, flags, runner)
       url = runner.capture(["git", "-C", cwd, "remote", "get-url", "origin"]).out.strip
       head = runner.capture(["git", "-C", cwd, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).out.strip
-      new(env, cwd, exe, repo: Config.repo_from(url), default_branch: head.sub(%r{\Aorigin/}, ""))
+      new(env, cwd, flags: flags, repo: Config.repo_from(url), default_branch: head.sub(%r{\Aorigin/}, ""))
     end
 
     # repo and default_branch come from the checkout's origin remote.
-    #: (Hash[String, String], String, String, ?config: Hash[String, String]?, ?repo: String, ?default_branch: String) -> void
-    def initialize(env, cwd, exe, config: nil, repo: "", default_branch: "")
+    #: (Hash[String, String], String, ?flags: Hash[String, String], ?config: Hash[String, String]?, ?repo: String, ?default_branch: String) -> void
+    def initialize(env, cwd, flags: {}, config: nil, repo: "", default_branch: "")
       @env = env
       @cwd = cwd
-      @exe = exe
+      @flags = flags.dup
       @repo = repo
       @default_branch = default_branch
       @config = config || Config.load(env, repo)
@@ -61,12 +53,15 @@ module Csd
       @repo
     end
 
+    # "" when neither -m nor the config file sets it: up asks, or fails.
     #: () -> String
     def machine
-      machine = value("machine")
-      raise Error, "set machine in #{config_path}, or CS_MACHINE" if machine.empty?
+      value("machine")
+    end
 
-      machine
+    #: (String) -> void
+    def machine=(name)
+      @flags["machine"] = name
     end
 
     #: () -> String
@@ -108,12 +103,12 @@ module Csd
 
     #: () -> String
     def codespace
-      env("CS")
+      @flags["codespace"].to_s
     end
 
     #: () -> bool
     def takeover?
-      !env("CS_TAKEOVER").empty?
+      @flags["takeover"].to_s == "true"
     end
 
     #: () -> String
@@ -131,8 +126,8 @@ module Csd
 
     #: (String) -> String
     def value(key)
-      from_env = ENV_NAMES[key] ? env(ENV_NAMES[key]) : ""
-      return from_env unless from_env.empty?
+      flag = @flags[key].to_s
+      return flag unless flag.empty?
 
       @config[key] || DEFAULTS[key].to_s
     end

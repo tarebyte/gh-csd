@@ -4,9 +4,10 @@ gh csd is a `gh` extension that pairs a local git worktree with its own GitHub C
 
 ## Layout
 
-- `bin/gh-csd.rb`: argument parsing and dispatch only. Keep logic in `lib/`.
-- `lib/csd/commands.rb`: the `up`, `run`, `down`, `init`, and hidden `__watch` commands.
-- `lib/csd/settings.rb`, `config.rb`: settings from env, the config file, and the origin remote.
+- `bin/gh-csd.rb`: dispatch only. Keep logic in `lib/`.
+- `lib/csd/cli.rb`: argument parsing, flags, and each command's `--help` text.
+- `lib/csd/commands.rb`: the `up`, `run`, `status`, `down`, and `init` commands. `prompt.rb` asks in a terminal.
+- `lib/csd/settings.rb`, `config.rb`: settings from flags, the config file, and the origin remote.
 - `lib/csd/worktree.rb`, `sync.rb`, `change_set.rb`: the local side and the rsync of changes.
 - `lib/csd/codespace.rb`, `remote.rb`: `gh codespace` calls, and ssh/rsync to the codespace.
 - `lib/csd/runner.rb`: every external command goes through `Runner`.
@@ -23,6 +24,10 @@ gh csd is a `gh` extension that pairs a local git worktree with its own GitHub C
 - Give every method an inline RBS signature comment (`#: (String) -> bool`). `make types` fails on any untyped parameter or return.
 - Spinel cannot type top-level methods, so `bin/gh-csd.rb` must not define helpers. Put them in a `lib/` class.
 - Minitest runs only on CRuby. `spinel/smoke.rb` exercises the library under Spinel, and `spinel diff` compares its output with CRuby's. Update it whenever a constructor or method signature changes.
+
+## CLI design
+
+Follow `gh`: flags named like `gh codespace` (`-m`, `-c`, `--devcontainer-path`), no setting that only an environment variable can set, a prompt only in a terminal with a flag for scripts, `--json <fields>` for output that scripts read, and progress in the foreground.
 
 ## Code style
 
@@ -45,7 +50,7 @@ gh csd is a `gh` extension that pairs a local git worktree with its own GitHub C
 
 Do not rename these without updating the readers:
 
-- `cs-dev-codespace` and `cs-dev-status` in the worktree's git dir: read by a status line in the user's dotfiles.
+- `cs-dev-codespace` and `cs-dev-status` in the worktree's git dir: read by a status line in the user's dotfiles. New readers should use `gh csd status --json` instead.
 - `.git/cs-dev-owner` in the codespace: marks which worktree owns it.
 - `~/.local/state/gh-csd/setup-ready` and `setup-complete` in the codespace: written by the user's dotfiles.
 

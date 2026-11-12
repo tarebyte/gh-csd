@@ -17,17 +17,19 @@ gh csd works on the repo of the current checkout. It reads the repo name and the
 ## Start an environment
 
 ```sh
-gh csd up <branch>
+gh csd up            # the worktree you are in
+gh csd up <branch>   # that branch's worktree, made if needed
 ```
 
-- Reuses the branch's existing worktree, wherever it is. Otherwise creates `<main-checkout>-<branch>` (slashes become `-`), branched from origin's default branch (the `branch` setting).
-- Creates or reuses the worktree's codespace on that branch, then does a first sync.
+- With no branch, `up` uses the current worktree. It fails in the main checkout.
+- With a branch, it reuses the branch's existing worktree, wherever it is. Otherwise it creates `<main-checkout>-<branch>` (slashes become `-`), branched from the base branch (the `branch` setting, origin's default by default).
+- Creates or reuses the worktree's codespace, then does a first sync. The codespace checks out the base branch, not yours; `run` copies your changes onto it.
 - Prints `gh csd: ready  worktree=<path>  codespace=<name>`. Tell the user both values.
 - A new codespace takes several minutes. Run `up` in the background and wait for it to finish.
-- `up` fails with `set machine in ...` when no `machine` is set. Ask the user which machine type to use. `gh api repos/<owner/name>/codespaces/machines --jq '.machines[].name'` lists them.
+- Without a terminal and with no `machine` set, `up` fails with `pass -m with one of: ...`. Ask the user which one, then pass `-m <machine>`.
 - If the devcontainer asks for extra repository permissions, `up` opens the approval page in the browser and waits up to 10 minutes. Tell the user to approve it there.
 - `up` waits for the dotfiles' `setup-ready` marker (up to 20 minutes), then runs `ready_check` until it succeeds (up to 5 minutes), when it is set.
-- For a new codespace, `up` leaves a background watcher that sends the user a desktop notification once the dotfiles write `setup-complete`, up to 30 minutes later.
+- `up -s` also waits for the dotfiles to write `setup-complete` (up to 30 minutes). Use it when the first command needs tools that the dotfiles install late.
 - After `up` prints `ready`, switch this session into the worktree without asking, if your agent can; otherwise run every command from the worktree. Do not edit or run commands in the main checkout; the user keeps it untouched.
 
 ## Run a command
@@ -39,8 +41,8 @@ gh csd run <test command> path/to/test
 gh csd run   # sync only
 ```
 
-- `run` uses the codespace that the worktree remembers. `CS=<name>` overrides it.
-- `run` refuses a codespace that another worktree owns. `CS_TAKEOVER=1` claims it anyway. Do not set that without asking the user.
+- `run` uses the codespace that the worktree remembers. `-c <name>` overrides it. Flags go before the command; use `--` if the command starts with `-`.
+- `run` refuses a codespace that another worktree owns. `--takeover` claims it anyway. Do not pass that without asking the user.
 - The change set is `git diff` against `merge-base(HEAD, origin/<branch>)` plus untracked files, copied on top of the codespace's own checkout, like a rebase. Files dirty in the codespace but no longer in the change set are reset to its HEAD.
 - Each run prints `gh csd: copied N, deleted N, reset N`. Report it if the counts look wrong.
 - A sync takes a few seconds. `run` returns the remote command's exit status.
@@ -64,6 +66,8 @@ gh csd run bash -lc 'git fetch origin'
 gh csd down <branch>
 ```
 
+Always pass the branch: without one, `down` asks for confirmation, which needs a terminal.
+
 - Deletes the worktree's codespace, then removes the worktree and its local branch.
 - Refuses when the worktree has uncommitted or untracked files, or the branch has commits that no remote has, and lists them.
 - Ask the user before running `down`. Ask again before adding `--force`, which deletes that work.
@@ -71,15 +75,23 @@ gh csd down <branch>
 ## Settings
 
 Optional config file: `~/.config/gh-csd/config.yml` (or `$XDG_CONFIG_HOME/gh-csd/config.yml`, or `$GH_CSD_CONFIG`).
-Keys go at the top level or under `repos: <owner/name>:`; environment variables override them.
+Keys go at the top level or under `repos: <owner/name>:`; flags override them.
 
-| Key | Environment | Default |
+| Key | Flag | Default |
 |---|---|---|
-| `machine` | `CS_MACHINE` | none; `up` requires it |
-| `devcontainer` | `CS_DEVCONTAINER` | `.devcontainer/devcontainer.json` |
-| `default_permissions` | `CS_DEFAULT_PERMISSIONS` | `false`; `true` skips the extra permissions |
-| `dir` | `REMOTE_DIR` | `/workspaces/<repo name>` |
-| `branch` | | origin's default branch, else `main` |
-| `ready_check` | `CS_READY_CHECK` | none; a command that succeeds once the codespace's services accept connections |
+| `machine` | `up -m` | none; `up` asks in a terminal |
+| `devcontainer` | `up --devcontainer-path` | `.devcontainer/devcontainer.json` |
+| `default_permissions` | `up --default-permissions` | `false`; `true` skips the extra permissions |
+| `dir` | | `/workspaces/<repo name>` |
+| `branch` | | origin's default branch, else `main`; the codespace's checkout and the base of new worktrees |
+| `ready_check` | | none; a command that succeeds once the codespace's services accept connections |
+
+## Check an environment
+
+```sh
+gh csd status --json branch,codespace,state,phase
+```
+
+Lists each worktree of the repo with its codespace. `state` is the codespace's (`Available`, `Shutdown`, or `Deleted` when it is gone); `phase` is what `up` is doing now.
 
 Do not edit the user's config file without asking.

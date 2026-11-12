@@ -12,12 +12,11 @@ module Csd
   class Config
     # What gh csd init writes: every setting, commented out.
     TEMPLATE = <<~YAML
-      # gh csd config. Environment variables override these settings.
+      # gh csd config. Flags override these settings.
       # Uncomment what you need. Top-level keys apply to every repo; a repo's
       # section under repos: wins over them.
 
-      # up requires machine. To list a repo's machine types, run:
-      #   gh api repos/<owner/name>/codespaces/machines --jq '.machines[].name'
+      # Without machine, up asks in a terminal, or takes -m.
       # machine: standardLinux32gb
       # devcontainer: .devcontainer/devcontainer.json
       # default_permissions: false
