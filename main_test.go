@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -20,9 +21,18 @@ func TestHelpAndUsageErrorsExitLikeGh(t *testing.T) {
 		"init unexpected": 1,
 	}
 	for args, want := range cases {
-		if got := execute(strings.Fields(args)); got != want {
-			t.Errorf("gh csd %s: want exit %d, got %d", args, want, got)
+		var stderr strings.Builder
+		if got := execute(context.Background(), strings.Fields(args), &stderr); got != want {
+			t.Errorf("gh csd %s: want exit %d, got %d: %s", args, want, got, stderr.String())
 		}
+	}
+}
+
+func TestErrorsGoToStderrWithThePrefix(t *testing.T) {
+	var stderr strings.Builder
+	execute(context.Background(), []string{"status", "--json"}, &stderr)
+	if !strings.HasPrefix(stderr.String(), "gh csd: Specify one or more comma-separated fields for `--json`:") {
+		t.Errorf("stderr: %q", stderr.String())
 	}
 }
 

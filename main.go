@@ -1,16 +1,25 @@
-// gh csd: edit a GitHub repo in a local worktree, and run it in that
-// worktree's own codespace. This file is flags, help, and wiring; the work
-// is in internal/csd.
+// Command gh-csd is the gh csd extension: edit a GitHub repo in a local
+// worktree, and run it in that worktree's own codespace. This file is
+// flags, help, exit codes, and wiring; the work is in internal/csd.
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/signal"
+	"path/filepath"
+	"slices"
 	"strings"
 
+	"github.com/AlecAivazis/survey/v2/terminal"
+	gh "github.com/cli/go-gh/v2"
+	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/cli/go-gh/v2/pkg/browser"
 	"github.com/cli/go-gh/v2/pkg/prompter"
+	"github.com/cli/go-gh/v2/pkg/ssh"
 	"github.com/cli/go-gh/v2/pkg/term"
 	"github.com/spf13/cobra"
 	"github.com/tarebyte/gh-csd/internal/csd"
@@ -20,26 +29,32 @@ import (
 // command's from run.
 type exitError struct{ code int }
 
-func (e exitError) Error() string { return fmt.Sprintf("exit %d", e.code) }
+func (e exitError) Error() string { return fmt.Sprintf("exit status %d", e.code) }
 
 func main() {
-	os.Exit(execute(os.Args[1:]))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	code := execute(ctx, os.Args[1:], os.Stderr)
+	stop()
+	os.Exit(code)
 }
 
-func execute(args []string) int {
+// execute runs gh csd with args and returns its exit status, as gh's:
+// 0 done, 1 failed, 2 cancelled.
+func execute(ctx context.Context, args []string, stderr io.Writer) int {
 	root := rootCmd()
 	root.SetArgs(args)
-	err := root.Execute()
+	root.SetErr(stderr)
+	err := root.ExecuteContext(ctx)
 	var exit exitError
 	switch {
 	case err == nil:
 		return 0
 	case errors.As(err, &exit):
 		return exit.code
-	case errors.Is(err, csd.ErrCancelled):
+	case errors.Is(err, csd.ErrCancelled), errors.Is(err, terminal.InterruptErr), errors.Is(err, context.Canceled):
 		return 2
 	default:
-		fmt.Fprintln(os.Stderr, "gh csd:", err)
+		fmt.Fprintln(stderr, "gh csd:", err)
 		return 1
 	}
 }
@@ -62,7 +77,7 @@ func rootCmd() *cobra.Command {
 }
 
 func upCmd() *cobra.Command {
-	flags := map[string]*string{}
+	var machine, devcontainer string
 	var defaultPermissions, status bool
 	cmd := &cobra.Command{
 		Use:   "up [<branch>]",
@@ -75,19 +90,19 @@ checks out the base branch; run copies your changes onto it.`,
 		Example: "  $ gh csd up\n  $ gh csd up me/fix-login -m standardLinux32gb",
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			set := map[string]string{"machine": *flags["machine"], "devcontainer": *flags["devcontainer"]}
+			flags := map[string]string{"machine": machine, "devcontainer": devcontainer}
 			if defaultPermissions {
-				set["default_permissions"] = "true"
+				flags["default_permissions"] = "true"
 			}
-			c, err := commands(set)
+			c, err := commands(cmd.Context(), flags)
 			if err != nil {
 				return err
 			}
-			return c.Up(strings.Join(args, ""), status)
+			return c.Up(cmd.Context(), strings.Join(args, ""), status)
 		},
 	}
-	flags["machine"] = cmd.Flags().StringP("machine", "m", "", "Machine type; asks in a terminal when not set")
-	flags["devcontainer"] = cmd.Flags().String("devcontainer-path", "", "Path to the devcontainer.json file to use")
+	cmd.Flags().StringVarP(&machine, "machine", "m", "", "Machine type; asks in a terminal when not set")
+	cmd.Flags().StringVar(&devcontainer, "devcontainer-path", "", "Path to the devcontainer.json file to use")
 	cmd.Flags().BoolVar(&defaultPermissions, "default-permissions", false, "Do not ask to approve the devcontainer's extra permissions")
 	cmd.Flags().BoolVarP(&status, "status", "s", false, "Wait until the dotfiles finish too")
 	return cmd
@@ -101,18 +116,18 @@ func runCmd() *cobra.Command {
 		Short: "Sync the worktree's changes to its codespace, then run a command there",
 		Long: `Copy the worktree's changes to its codespace, then run a command there.
 With no command, run only syncs. The command runs in a non-login shell, as
-with gh codespace ssh.`,
+with gh codespace ssh, and run exits with the command's exit status.`,
 		Example: "  $ gh csd run bin/test test/user_test.rb\n  $ gh csd run -- bash -lc 'git fetch origin'",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			set := map[string]string{"codespace": codespace}
+			flags := map[string]string{"codespace": codespace}
 			if takeover {
-				set["takeover"] = "true"
+				flags["takeover"] = "true"
 			}
-			c, err := commands(set)
+			c, err := commands(cmd.Context(), flags)
 			if err != nil {
 				return err
 			}
-			code, err := c.Run(args)
+			code, err := c.Run(cmd.Context(), args)
 			if err == nil && code != 0 {
 				return exitError{code}
 			}
@@ -136,22 +151,23 @@ func statusCmd() *cobra.Command {
 			if err := checkJSONFlags(opts); err != nil {
 				return err
 			}
-			c, err := commands(nil)
+			c, err := commands(cmd.Context(), nil)
 			if err != nil {
 				return err
 			}
-			return c.Status(opts)
+			return c.Status(cmd.Context(), opts)
 		},
 	}
 	cmd.Flags().StringSliceVar(&opts.Fields, "json", nil, "Output JSON with the specified fields")
+	cmd.Flags().StringVarP(&opts.JQ, "jq", "q", "", "Filter JSON output using a jq expression")
+	cmd.Flags().StringVarP(&opts.Template, "template", "t", "", "Format JSON output using a Go template; see \"gh help formatting\"")
+	// As gh: --json without fields lists them.
 	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
 		if err.Error() == "flag needs an argument: --json" {
 			return errors.New(fieldsHelp())
 		}
 		return fmt.Errorf("%w\n\n%s", err, c.UsageString())
 	})
-	cmd.Flags().StringVarP(&opts.JQ, "jq", "q", "", "Filter JSON output using a jq expression")
-	cmd.Flags().StringVarP(&opts.Template, "template", "t", "", "Format JSON output using a Go template; see \"gh help formatting\"")
 	return cmd
 }
 
@@ -162,7 +178,7 @@ func fieldsHelp() string {
 
 func checkJSONFlags(opts csd.StatusOptions) error {
 	for _, f := range opts.Fields {
-		if !contains(csd.JSONFields, f) {
+		if !slices.Contains(csd.JSONFields, f) {
 			return fmt.Errorf("unknown JSON field: %q\n%s", f, fieldsHelp())
 		}
 	}
@@ -184,11 +200,11 @@ With no branch, down uses the worktree you are in and asks first.`,
 		Example: "  $ gh csd down me/fix-login",
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := commands(nil)
+			c, err := commands(cmd.Context(), nil)
 			if err != nil {
 				return err
 			}
-			return c.Down(strings.Join(args, ""), force)
+			return c.Down(cmd.Context(), strings.Join(args, ""), force)
 		},
 	}
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Delete even when the branch has uncommitted or unpushed work")
@@ -202,38 +218,64 @@ func initCmd() *cobra.Command {
 		Long:  "Write a commented config file. Never replaces an existing one.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := commands(nil)
-			if err != nil {
-				return err
-			}
-			return c.Init()
+			// The config may not exist or parse yet, so init reads only the
+			// environment.
+			s := csd.NewSettings(environment(), "", nil, nil, "", "")
+			return csd.NewCommands(s, csd.Deps{IO: csd.IO{Out: os.Stdout, Err: os.Stderr}}).Init()
 		},
 	}
 }
 
-// commands wires the real runner, clock, terminal, and browser.
-func commands(flags map[string]string) (*csd.Commands, error) {
+func environment() map[string]string {
 	env := map[string]string{}
 	for _, key := range csd.EnvKeys {
 		env[key] = os.Getenv(key)
 	}
+	if home, err := os.UserHomeDir(); err == nil {
+		env["HOME"] = home
+	}
+	return env
+}
+
+// commands wires the real runner, REST client, terminal, and browser.
+func commands(ctx context.Context, flags map[string]string) (*csd.Commands, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, err
 	}
-	runner := csd.ExecRunner{}
-	settings, err := csd.ForCheckout(env, cwd, flags, runner)
+	ghPath, err := gh.Path()
 	if err != nil {
 		return nil, err
 	}
+	client, err := api.DefaultRESTClient()
+	if err != nil {
+		return nil, err
+	}
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		return nil, err
+	}
+	runner := csd.ExecRunner{}
+	settings, err := csd.ForCheckout(ctx, environment(), cwd, flags, runner, ssh.NewTranslator().Translate)
+	if err != nil {
+		return nil, err
+	}
+	settings.CacheDir = filepath.Join(cache, "gh-csd")
 	t := term.FromEnv()
 	width, _, err := t.Size()
 	if err != nil {
 		width = 80
 	}
-	out := csd.IO{Out: t.Out(), Err: t.ErrOut(), TTY: t.IsTerminalOutput(), Width: width}
-	b := browser.New("", os.Stderr, os.Stderr)
-	return csd.NewCommands(runner, csd.NewRealClock(), settings, newPrompt(), out, b.Browse), nil
+	return csd.NewCommands(settings, csd.Deps{
+		Runner: runner,
+		API:    client,
+		GH:     ghPath,
+		Clock:  csd.NewRealClock(),
+		Prompt: newPrompt(),
+		IO: csd.IO{Out: t.Out(), Err: t.ErrOut(), TTY: t.IsTerminalOutput(), Color: t.IsColorEnabled(),
+			StdinTTY: term.IsTerminal(os.Stdin), Width: width},
+		Open: browser.New("", os.Stderr, os.Stderr).Browse,
+	}), nil
 }
 
 // termPrompt asks with gh's prompter, on stderr so stdout stays clean.
@@ -257,12 +299,3 @@ func (t termPrompt) Choose(question string, options []string) (string, error) {
 }
 
 func (t termPrompt) Confirm(question string) (bool, error) { return t.p.Confirm(question, false) }
-
-func contains(items []string, s string) bool {
-	for _, item := range items {
-		if item == s {
-			return true
-		}
-	}
-	return false
-}

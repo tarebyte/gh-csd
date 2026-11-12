@@ -2,9 +2,11 @@ package csd
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -30,15 +32,41 @@ const Template = `# gh csd config. Flags override these settings.
 #     ready_check: nc -z localhost 5432
 `
 
-var repoPattern = regexp.MustCompile(`github\.com[:/]([^/]+/[^/]+?)(?:\.git)?/?$`)
+var scpLike = regexp.MustCompile(`^(?:([^@/]+)@)?([^:/]+):(.+)$`)
 
-// RepoFrom returns owner/name from a github.com origin URL (SSH or HTTPS),
-// or "".
-func RepoFrom(url string) string {
-	if m := repoPattern.FindStringSubmatch(url); m != nil {
-		return m[1]
+// RepoFrom returns owner/name from a github.com remote URL, or "". It
+// reads https and ssh URLs and git's scp-like form (git@host:owner/repo).
+// translate maps an ssh host alias to its real host, as go-gh's
+// ssh.Translator does; nil leaves hosts as written.
+func RepoFrom(remote string, translate func(*url.URL) *url.URL) string {
+	u, err := remoteURL(remote)
+	if err != nil {
+		return ""
 	}
-	return ""
+	if translate != nil && u.Scheme == "ssh" {
+		u = translate(u)
+	}
+	if host := strings.ToLower(u.Hostname()); host != "github.com" && host != "ssh.github.com" {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return ""
+	}
+	return parts[0] + "/" + strings.TrimSuffix(parts[1], ".git")
+}
+
+func remoteURL(remote string) (*url.URL, error) {
+	if !strings.Contains(remote, "://") {
+		if m := scpLike.FindStringSubmatch(remote); m != nil {
+			u := &url.URL{Scheme: "ssh", Host: m[2], Path: "/" + m[3]}
+			if m[1] != "" {
+				u.User = url.User(m[1])
+			}
+			return u, nil
+		}
+	}
+	return url.Parse(remote)
 }
 
 // ConfigPath follows the gh-dash convention for gh extensions:

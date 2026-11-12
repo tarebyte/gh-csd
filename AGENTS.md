@@ -4,12 +4,13 @@ gh csd is a `gh` extension that pairs a local git worktree with its own GitHub C
 
 ## Layout
 
-- `main.go`: cobra commands, flags, `--help` text, exit codes, and the wiring of the real terminal, prompter, and browser. Keep logic in `internal/csd`.
+- `main.go`: cobra commands, flags, `--help` text, exit codes (0 done, 1 failed, 2 cancelled, as gh), and the wiring of the real runner, REST client, terminal, prompter, and browser. Keep logic in `internal/csd`.
 - `internal/csd/commands.go`: the `up`, `run`, `status`, `down`, and `init` commands.
 - `internal/csd/settings.go`, `config.go`: settings from flags, the config file, and the origin remote.
 - `internal/csd/worktree.go`, `sync.go`, `changeset.go`: the local side and the rsync of changes.
-- `internal/csd/codespace.go`, `remote.go`: `gh codespace` calls, waiting, and ssh/rsync to the codespace.
-- `internal/csd/runner.go`: every external command goes through `Runner`.
+- `internal/csd/codespace.go`, `remote.go`: codespaces through the REST API (`API`), `gh codespace create` and `ssh --config` through the gh that runs the extension, waiting, and ssh/rsync to the codespace.
+- `internal/csd/runner.go`: every external command goes through `Runner`, which returns an error only when a program cannot start.
+- `script/build.sh`: the release build, macOS and Linux only.
 
 ## Commands
 
@@ -18,7 +19,7 @@ gh csd is a `gh` extension that pairs a local git worktree with its own GitHub C
 
 ## Use go-gh
 
-Reach for go-gh before writing your own: `pkg/jq` and `pkg/template` for `--jq` and `--template`, `pkg/jsonpretty` for JSON, `pkg/tableprinter` for tables, `pkg/prompter` for questions, `pkg/term` for TTY checks and width, and `pkg/browser` to open URLs. They behave as gh does.
+Reach for go-gh before writing your own: `pkg/api` for GitHub (a 404 is `*api.HTTPError`; never treat another failure as "not found"), `gh.Path` for the gh executable, `pkg/ssh` to resolve ssh host aliases, `pkg/jq` and `pkg/template` for `--jq` and `--template`, `pkg/jsonpretty` for JSON, `pkg/tableprinter` for tables, `pkg/prompter` for questions, `pkg/term` for TTY checks and width, and `pkg/browser` to open URLs. They behave as gh does.
 
 ## CLI design
 
@@ -26,13 +27,16 @@ Follow `gh`: flags named like `gh codespace` (`-m`, `-c`, `--devcontainer-path`)
 
 ## Code style
 
+- Pass `context.Context` first to anything that runs a program, calls the API, or waits; `main` cancels it on Ctrl-C.
+- Never let a failed step look like an empty result: an error from git, gh, or the API stops the command before it changes anything.
+
 - Match the surrounding code: small types, short functions, errors returned rather than logged, and a one-line comment only for a why the code cannot show.
 - Keep the code repo-neutral. No defaults, comments, or text that name a specific repo. Per-repo values belong in the user's `~/.config/gh-csd/config.yml`.
 
 ## Testing
 
 - Add or update tests for every change, next to the code (`*_test.go`).
-- Tests never run real `gh`, ssh, or rsync. Use `fakeRunner` (`internal/csd/helpers_test.go`) and script its replies with `on` and `onSSH`. Git runs for real in a throwaway repo (`gitRepo`), and `fakeClock` makes waits instant.
+- Tests never run real `gh`, ssh, rsync, or the GitHub API. Use `fakeRunner` (`internal/csd/helpers_test.go`) and script its replies with `on` and `onSSH`; use `fakeAPI` for REST calls. Git runs for real in a throwaway repo (`gitRepo`), and `fakeClock` makes waits instant.
 - `testSettings` builds settings for the fake origin `me/my-app`; tests never read the real config file.
 
 ## Security

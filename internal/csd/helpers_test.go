@@ -2,13 +2,22 @@ package csd
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cli/go-gh/v2/pkg/api"
 )
+
+// bg is the context for tests that never cancel.
+var bg = context.Background()
 
 // fakeRunner stands in for ExecRunner: it records every command and
 // replies with scripted results. Unscripted commands succeed with empty
@@ -23,6 +32,7 @@ type fakeRunner struct {
 type reply struct {
 	match func([]string) bool
 	res   Result
+	err   error
 }
 
 func newFake(passthrough ...string) *fakeRunner {
@@ -36,42 +46,85 @@ func newFake(passthrough ...string) *fakeRunner {
 // on scripts the reply to the next command starting with prefix. Replies
 // are used once each, in the order they were added.
 func (f *fakeRunner) on(res Result, prefix ...string) *fakeRunner {
-	f.replies = append(f.replies, reply{func(cmd []string) bool { return hasPrefix(cmd, prefix) }, res})
+	f.replies = append(f.replies, reply{match: func(cmd []string) bool { return hasPrefix(cmd, prefix) }, res: res})
 	return f
 }
 
 // onSSH scripts the reply to the next ssh call whose script contains
 // fragment.
 func (f *fakeRunner) onSSH(fragment string, res Result) *fakeRunner {
-	f.replies = append(f.replies, reply{func(cmd []string) bool {
+	f.replies = append(f.replies, reply{match: func(cmd []string) bool {
 		return cmd[0] == "ssh" && strings.Contains(cmd[len(cmd)-1], fragment)
-	}, res})
+	}, res: res})
 	return f
 }
 
-func (f *fakeRunner) Capture(cmd []string, stdin string) Result {
+// onStartError scripts a program that cannot start.
+func (f *fakeRunner) onStartError(err error, prefix ...string) *fakeRunner {
+	f.replies = append(f.replies, reply{func(cmd []string) bool { return hasPrefix(cmd, prefix) }, Result{}, err})
+	return f
+}
+
+func (f *fakeRunner) Capture(ctx context.Context, cmd []string, stdin string) (Result, error) {
 	f.calls = append(f.calls, cmd)
 	f.stdins = append(f.stdins, stdin)
 	if f.pass[cmd[0]] {
-		return ExecRunner{}.Capture(cmd, stdin)
+		return ExecRunner{}.Capture(ctx, cmd, stdin)
 	}
 	return f.replyFor(cmd)
 }
 
-func (f *fakeRunner) Run(cmd []string) int {
+func (f *fakeRunner) Run(_ context.Context, cmd []string) (int, error) {
 	f.calls = append(f.calls, cmd)
 	f.stdins = append(f.stdins, "")
-	return f.replyFor(cmd).Status
+	res, err := f.replyFor(cmd)
+	return res.Status, err
 }
 
-func (f *fakeRunner) replyFor(cmd []string) Result {
+func (f *fakeRunner) replyFor(cmd []string) (Result, error) {
 	for i, r := range f.replies {
 		if r.match(cmd) {
 			f.replies = append(f.replies[:i], f.replies[i+1:]...)
-			return r.res
+			return r.res, r.err
 		}
 	}
-	return Result{}
+	return Result{}, nil
+}
+
+// fakeAPI stands in for go-gh's REST client. Unscripted requests succeed
+// with an empty object.
+type fakeAPI struct {
+	calls   []string
+	replies []apiReply
+}
+
+type apiReply struct {
+	method, path string
+	status       int
+	body         string
+}
+
+// on scripts the reply to the next request whose path starts with path.
+func (a *fakeAPI) on(method, path string, status int, body string) *fakeAPI {
+	a.replies = append(a.replies, apiReply{method, path, status, body})
+	return a
+}
+
+func (a *fakeAPI) DoWithContext(_ context.Context, method, path string, _ io.Reader, response any) error {
+	a.calls = append(a.calls, method+" "+path)
+	for i, r := range a.replies {
+		if r.method == method && strings.HasPrefix(path, r.path) {
+			a.replies = append(a.replies[:i], a.replies[i+1:]...)
+			if r.status >= 400 {
+				return &api.HTTPError{StatusCode: r.status, Message: http.StatusText(r.status)}
+			}
+			if response != nil && r.body != "" {
+				return json.Unmarshal([]byte(r.body), response)
+			}
+			return nil
+		}
+	}
+	return nil
 }
 
 func (f *fakeRunner) matching(prefix ...string) [][]string {
@@ -130,9 +183,10 @@ type fakeClock struct {
 }
 
 func (c *fakeClock) Now() time.Duration { return c.now }
-func (c *fakeClock) Pause(d time.Duration) {
+func (c *fakeClock) Pause(ctx context.Context, d time.Duration) error {
 	c.pauses = append(c.pauses, d)
 	c.now += d
+	return ctx.Err()
 }
 
 // fakePrompt answers with scripted choices.

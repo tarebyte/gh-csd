@@ -3,9 +3,12 @@ package csd
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 // Result is a finished command's output and exit status.
@@ -17,45 +20,44 @@ type Result struct {
 // OK reports a zero exit status.
 func (r Result) OK() bool { return r.Status == 0 }
 
-// Runner runs every external command, so tests can swap in a fake.
+// Runner runs every external command, so tests can swap in a fake. Both
+// methods return an error only when the program cannot start; a non-zero
+// exit is a Result.
 type Runner interface {
 	// Capture runs cmd with stdin and collects its output.
-	Capture(cmd []string, stdin string) Result
+	Capture(ctx context.Context, cmd []string, stdin string) (Result, error)
 	// Run attaches cmd to the terminal, for the user's own command.
-	Run(cmd []string) int
+	Run(ctx context.Context, cmd []string) (int, error)
 }
 
 // ExecRunner runs commands for real.
 type ExecRunner struct{}
 
-func (ExecRunner) Capture(cmd []string, stdin string) Result {
-	c := exec.Command(cmd[0], cmd[1:]...)
+// Capture implements Runner.
+func (ExecRunner) Capture(ctx context.Context, cmd []string, stdin string) (Result, error) {
+	c := exec.CommandContext(ctx, cmd[0], cmd[1:]...)
 	var out, errOut bytes.Buffer
-	c.Stdin = bytes.NewBufferString(stdin)
+	c.Stdin = strings.NewReader(stdin)
 	c.Stdout, c.Stderr = &out, &errOut
-	code := status(c.Run(), &errOut)
-	return Result{out.String(), errOut.String(), code}
+	code, err := exitCode(c.Run(), cmd[0])
+	return Result{out.String(), errOut.String(), code}, err
 }
 
-func (ExecRunner) Run(cmd []string) int {
-	c := exec.Command(cmd[0], cmd[1:]...)
+// Run implements Runner.
+func (ExecRunner) Run(ctx context.Context, cmd []string) (int, error) {
+	c := exec.CommandContext(ctx, cmd[0], cmd[1:]...)
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
-	return status(c.Run(), nil)
+	return exitCode(c.Run(), cmd[0])
 }
 
-// status turns a run error into an exit status: 127 when the program
-// could not start, as a shell reports it.
-func status(err error, errOut *bytes.Buffer) int {
+func exitCode(err error, program string) (int, error) {
 	var exit *exec.ExitError
 	switch {
 	case err == nil:
-		return 0
+		return 0, nil
 	case errors.As(err, &exit):
-		return exit.ExitCode()
+		return exit.ExitCode(), nil
 	default:
-		if errOut != nil {
-			errOut.WriteString(err.Error())
-		}
-		return 127
+		return 0, fmt.Errorf("running %s: %w", program, err)
 	}
 }

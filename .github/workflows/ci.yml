@@ -24,7 +24,7 @@ jobs:
         env:
           GIT_CONFIG_GLOBAL: /dev/null
 
-  # Builds a binary per platform and attaches them to the tag's release,
+  # Builds macOS and Linux binaries (script/build.sh) and attaches them to the tag's release,
   # where gh extension install finds them.
   release:
     needs: check
@@ -37,3 +37,4 @@ jobs:
       - uses: cli/gh-extension-precompile@76961aa3bd1123d0a6fd42d0a41aca0696937c39 # v2.2.0
         with:
           go_version_file: go.mod
+          build_script_override: script/build.sh

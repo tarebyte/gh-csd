@@ -2,6 +2,7 @@ package csd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,78 +37,92 @@ type Prompt interface {
 	Confirm(question string) (bool, error)
 }
 
-// IO is where commands write: Out for results, Err for progress, and
-// whether Out is a terminal (tables and colors).
+// IO is where commands write: Out for results and Err for progress. TTY and
+// Color describe Out; StdinTTY says whether run can attach a terminal.
 type IO struct {
 	Out, Err io.Writer
 	TTY      bool
+	Color    bool
+	StdinTTY bool
 	Width    int
+}
+
+// Deps are what commands use beyond their settings; main wires the real
+// ones and tests the fakes.
+type Deps struct {
+	Runner Runner
+	API    API
+	// GH is the gh executable, the same one that runs this extension.
+	GH     string
+	Clock  Clock
+	Prompt Prompt
+	IO     IO
+	// Open opens a URL in the browser.
+	Open func(url string) error
 }
 
 // Commands are gh csd's commands.
 type Commands struct {
-	runner     Runner
-	clock      Clock
+	Deps
 	settings   *Settings
-	prompt     Prompt
-	io         IO
 	codespaces *Codespaces
 }
 
-func NewCommands(r Runner, clock Clock, s *Settings, p Prompt, out IO, open func(string) error) *Commands {
-	return &Commands{r, clock, s, p, out, &Codespaces{runner: r, clock: clock, Open: open, log: out.Err}}
+// NewCommands builds the commands for settings.
+func NewCommands(s *Settings, d Deps) *Commands {
+	return &Commands{d, s, &Codespaces{runner: d.Runner, api: d.API, gh: d.GH, clock: d.Clock, Open: d.Open, log: d.IO.Err}}
 }
 
 // Up creates or reuses the codespace of branch's worktree ("" means the
 // worktree at cwd). With status, it also waits for the dotfiles.
-func (c *Commands) Up(branch string, status bool) error {
-	tree, err := c.worktree(branch)
+func (c *Commands) Up(ctx context.Context, branch string, status bool) error {
+	tree, err := c.worktree(ctx, branch)
 	if err != nil {
 		return err
 	}
-	created, err := tree.Create()
+	created, err := tree.Create(ctx)
 	if err != nil {
 		return err
 	}
 	if !created {
 		c.log("reusing worktree %s", tree.Path)
 	}
-	name, err := c.reusableCodespace(tree)
+	name, err := c.reusableCodespace(ctx, tree)
 	if err == nil && name == "" {
-		name, err = c.createCodespace(tree, status)
+		name, err = c.createCodespace(ctx, tree, status)
 	}
 	if err != nil {
 		return err
 	}
-	if _, err := c.sync(tree, name); err != nil {
+	if _, err := c.sync(ctx, tree, name); err != nil {
 		return err
 	}
-	fmt.Fprintf(c.io.Out, "gh csd: ready  worktree=%s  codespace=%s\n", tree.Path, name)
+	fmt.Fprintf(c.IO.Out, "gh csd: ready  worktree=%s  codespace=%s\n", tree.Path, name)
 	return nil
 }
 
 // Run syncs the worktree at cwd, then runs args in its codespace and
 // returns their exit status. No args only syncs.
-func (c *Commands) Run(args []string) (int, error) {
+func (c *Commands) Run(ctx context.Context, args []string) (int, error) {
 	if err := c.settings.RequireRepo(); err != nil {
 		return 0, err
 	}
-	tree, err := Current(c.runner, c.settings.Cwd, c.settings.Branch())
+	tree, err := Current(ctx, c.Runner, c.settings.Cwd, c.settings.Branch())
 	if err != nil {
 		return 0, err
 	}
 	name := c.settings.Codespace()
 	if name == "" {
-		name = tree.Codespace()
+		name = tree.Codespace(ctx)
 	}
 	if name == "" {
 		return 0, fmt.Errorf("no codespace for %s; run gh csd up first, or pass -c", tree.Path)
 	}
-	remote, err := c.sync(tree, name)
+	remote, err := c.sync(ctx, tree, name)
 	if err != nil || len(args) == 0 {
 		return 0, err
 	}
-	return remote.Run(args)
+	return remote.Run(ctx, args)
 }
 
 // StatusOptions are status's output flags, as gh's --json, --jq, and
@@ -119,8 +134,8 @@ type StatusOptions struct {
 }
 
 // Status lists each linked worktree and its codespace.
-func (c *Commands) Status(opts StatusOptions) error {
-	rows, err := c.statusRows()
+func (c *Commands) Status(ctx context.Context, opts StatusOptions) error {
+	rows, err := c.statusRows(ctx)
 	if err != nil {
 		return err
 	}
@@ -128,10 +143,10 @@ func (c *Commands) Status(opts StatusOptions) error {
 		return c.printJSON(rows, opts)
 	}
 	if len(rows) == 0 {
-		fmt.Fprintln(c.io.Err, "gh csd: no worktrees")
+		fmt.Fprintln(c.IO.Err, "gh csd: no worktrees")
 		return nil
 	}
-	table := tableprinter.New(c.io.Out, c.io.TTY, c.io.Width)
+	table := tableprinter.New(c.IO.Out, c.IO.TTY, c.IO.Width)
 	table.AddHeader([]string{"BRANCH", "CODESPACE", "STATE", "PHASE", "WORKTREE"})
 	for _, row := range rows {
 		for _, field := range []string{"branch", "codespace", "state", "phase", "worktree"} {
@@ -143,9 +158,11 @@ func (c *Commands) Status(opts StatusOptions) error {
 }
 
 // Down deletes branch's codespace, worktree, and local branch ("" means
-// the worktree at cwd, after asking).
-func (c *Commands) Down(branch string, force bool) error {
-	tree, err := c.downTarget(branch)
+// the worktree at cwd, after asking). It stops before removing anything
+// when it cannot tell whether the codespace still exists, so a codespace
+// is never orphaned.
+func (c *Commands) Down(ctx context.Context, branch string, force bool) error {
+	tree, err := c.downTarget(ctx, branch)
 	if err != nil {
 		return err
 	}
@@ -153,7 +170,7 @@ func (c *Commands) Down(branch string, force bool) error {
 		return fmt.Errorf("no worktree at %s", tree.Path)
 	}
 	if !force {
-		work, err := tree.UnsavedWork()
+		work, err := tree.UnsavedWork(ctx)
 		if err != nil {
 			return err
 		}
@@ -161,14 +178,20 @@ func (c *Commands) Down(branch string, force bool) error {
 			return fmt.Errorf("%s has work that would be lost; --force deletes it anyway\n%s", tree.Branch, work)
 		}
 	}
-	if name := tree.Codespace(); name != "" && c.codespaces.Exist(name) {
-		if err := c.codespaces.Delete(name); err != nil {
+	if name := tree.Codespace(ctx); name != "" {
+		exists, err := c.codespaces.Exist(ctx, name)
+		if err != nil {
 			return err
 		}
-		NewRemote(c.runner, name, c.settings).Forget()
-		c.log("deleted codespace %s", name)
+		if exists {
+			if err := c.codespaces.Delete(ctx, name); err != nil {
+				return err
+			}
+			c.log("deleted codespace %s", name)
+		}
+		c.remote(name).Forget()
 	}
-	if err := tree.Remove(force); err != nil {
+	if err := tree.Remove(ctx, force); err != nil {
 		return err
 	}
 	c.log("removed worktree=%s branch=%s", tree.Path, tree.Branch)
@@ -191,32 +214,32 @@ func (c *Commands) Init() error {
 	return nil
 }
 
-func (c *Commands) worktree(branch string) (*Worktree, error) {
+func (c *Commands) worktree(ctx context.Context, branch string) (*Worktree, error) {
 	if err := c.settings.RequireRepo(); err != nil {
 		return nil, err
 	}
 	if branch == "" {
-		return Here(c.runner, c.settings.Cwd, c.settings.Branch())
+		return Here(ctx, c.Runner, c.settings.Cwd, c.settings.Branch())
 	}
-	return ForBranch(c.runner, branch, c.settings.Cwd, c.settings.Branch())
+	return ForBranch(ctx, c.Runner, branch, c.settings.Cwd, c.settings.Branch())
 }
 
-func (c *Commands) downTarget(branch string) (*Worktree, error) {
+func (c *Commands) downTarget(ctx context.Context, branch string) (*Worktree, error) {
 	if branch != "" {
-		return c.worktree(branch)
+		return c.worktree(ctx, branch)
 	}
-	if !c.prompt.Interactive() {
-		return nil, fmt.Errorf("pass the branch to down when not in a terminal")
+	if !c.Prompt.Interactive() {
+		return nil, errors.New("pass the branch to down when not in a terminal")
 	}
-	tree, err := c.worktree("")
+	tree, err := c.worktree(ctx, "")
 	if err != nil {
 		return nil, err
 	}
 	what := fmt.Sprintf("worktree %s and branch %s", tree.Path, tree.Branch)
-	if name := tree.Codespace(); name != "" {
+	if name := tree.Codespace(ctx); name != "" {
 		what = "codespace " + name + ", " + what
 	}
-	ok, err := c.prompt.Confirm("Delete " + what + "?")
+	ok, err := c.Prompt.Confirm("Delete " + what + "?")
 	if err != nil {
 		return nil, err
 	}
@@ -226,43 +249,48 @@ func (c *Commands) downTarget(branch string) (*Worktree, error) {
 	return tree, nil
 }
 
-func (c *Commands) reusableCodespace(tree *Worktree) (string, error) {
-	name := tree.Codespace()
-	if name == "" || !c.codespaces.Exist(name) {
+func (c *Commands) reusableCodespace(ctx context.Context, tree *Worktree) (string, error) {
+	name := tree.Codespace(ctx)
+	if name == "" {
 		return "", nil
+	}
+	exists, err := c.codespaces.Exist(ctx, name)
+	if err != nil || !exists {
+		return "", err
 	}
 	c.log("reusing codespace %s", name)
 	// A stopped codespace restarts on connect, and its services start after it.
-	if err := c.waitForServices(tree, name); err != nil {
+	if err := c.waitForServices(ctx, tree, name); err != nil {
 		return "", err
 	}
-	return name, tree.SetPhase("")
+	tree.SetPhase(ctx, "")
+	return name, nil
 }
 
-func (c *Commands) createCodespace(tree *Worktree, status bool) (string, error) {
-	defer tree.SetPhase("")
-	if err := c.chooseMachine(); err != nil {
+func (c *Commands) createCodespace(ctx context.Context, tree *Worktree, status bool) (string, error) {
+	defer tree.SetPhase(ctx, "")
+	if err := c.chooseMachine(ctx); err != nil {
 		return "", err
 	}
 	c.log("creating codespace on %s (a few minutes)...", c.settings.Machine())
-	tree.SetPhase("creating…")
-	name, err := c.codespaces.Create(tree.Branch, c.settings)
+	tree.SetPhase(ctx, "creating…")
+	name, err := c.codespaces.Create(ctx, tree.Branch, c.settings)
 	if err != nil {
 		return "", err
 	}
-	if err := tree.Bind(name); err != nil {
+	if err := tree.Bind(ctx, name); err != nil {
 		return "", err
 	}
-	return name, c.waitUntilReady(tree, name, status)
+	return name, c.waitUntilReady(ctx, tree, name, status)
 }
 
 // chooseMachine works as gh codespace create: the only machine type without
 // asking, else ask in a terminal, else fail with the flag to pass.
-func (c *Commands) chooseMachine() error {
+func (c *Commands) chooseMachine(ctx context.Context) error {
 	if c.settings.Machine() != "" {
 		return nil
 	}
-	names, err := c.codespaces.Machines(c.settings)
+	names, err := c.codespaces.Machines(ctx, c.settings)
 	if err != nil {
 		return err
 	}
@@ -271,8 +299,8 @@ func (c *Commands) chooseMachine() error {
 		return fmt.Errorf("%s has no machine types available", c.settings.Repo())
 	case len(names) == 1:
 		c.settings.SetMachine(names[0])
-	case c.prompt.Interactive():
-		name, err := c.prompt.Choose("Choose a machine type:", names)
+	case c.Prompt.Interactive():
+		name, err := c.Prompt.Choose("Choose a machine type:", names)
 		if err != nil {
 			return err
 		}
@@ -283,46 +311,51 @@ func (c *Commands) chooseMachine() error {
 	return nil
 }
 
-func (c *Commands) waitUntilReady(tree *Worktree, name string, status bool) error {
+func (c *Commands) waitUntilReady(ctx context.Context, tree *Worktree, name string, status bool) error {
 	c.log("waiting for codespace setup...")
-	tree.SetPhase("setting up…")
-	ready, err := c.waitForFile(name, readyMarker, 20*time.Minute, 15*time.Second)
+	tree.SetPhase(ctx, "setting up…")
+	ready, err := c.waitForFile(ctx, name, readyMarker, 20*time.Minute, 15*time.Second)
 	if err != nil {
 		return err
 	}
 	if !ready {
 		c.log("no ready marker after 20m; continuing")
 	}
-	if err := c.waitForServices(tree, name); err != nil || !status {
+	if err := c.waitForServices(ctx, tree, name); err != nil || !status {
 		return err
 	}
 	c.log("waiting for the dotfiles to finish...")
-	tree.SetPhase("dotfiles…")
-	done, err := c.waitForFile(name, doneMarker, 30*time.Minute, 30*time.Second)
-	if err == nil {
-		c.log(map[bool]string{true: "dotfiles finished", false: "dotfiles not finished after 30m; continuing"}[done])
+	tree.SetPhase(ctx, "dotfiles…")
+	done, err := c.waitForFile(ctx, name, doneMarker, 30*time.Minute, 30*time.Second)
+	if err != nil {
+		return err
 	}
-	return err
+	if done {
+		c.log("dotfiles finished")
+	} else {
+		c.log("dotfiles not finished after 30m; continuing")
+	}
+	return nil
 }
 
-func (c *Commands) waitForFile(name, path string, timeout, interval time.Duration) (bool, error) {
-	remote := NewRemote(c.runner, name, c.settings)
-	return Wait(c.clock, timeout, interval, func() (bool, error) { return remote.FileExists(path) })
+func (c *Commands) waitForFile(ctx context.Context, name, path string, timeout, interval time.Duration) (bool, error) {
+	remote := c.remote(name)
+	return Wait(ctx, c.Clock, timeout, interval, func() (bool, error) { return remote.FileExists(ctx, path) })
 }
 
 // waitForServices: services start with the container but take a while to
 // accept connections, and the first test after up can fail without it.
-func (c *Commands) waitForServices(tree *Worktree, name string) error {
+func (c *Commands) waitForServices(ctx context.Context, tree *Worktree, name string) error {
 	check := c.settings.ReadyCheck()
 	if check == "" {
 		return nil
 	}
 	c.log("waiting for services...")
-	tree.SetPhase("starting services…")
-	remote := NewRemote(c.runner, name, c.settings)
-	ready, err := Wait(c.clock, 5*time.Minute, 5*time.Second, func() (bool, error) {
-		res, err := remote.Capture(check, "")
-		if errors.Is(err, ErrNoSSHServer) {
+	tree.SetPhase(ctx, "starting services…")
+	remote := c.remote(name)
+	ready, err := Wait(ctx, c.Clock, 5*time.Minute, 5*time.Second, func() (bool, error) {
+		res, err := remote.Capture(ctx, check, "")
+		if errors.Is(err, ErrNoSSHServer) || ctx.Err() != nil {
 			return false, err
 		}
 		return err == nil && res.OK(), nil
@@ -333,28 +366,28 @@ func (c *Commands) waitForServices(tree *Worktree, name string) error {
 	return err
 }
 
-func (c *Commands) statusRows() ([]map[string]string, error) {
+func (c *Commands) statusRows(ctx context.Context) ([]map[string]string, error) {
 	if err := c.settings.RequireRepo(); err != nil {
 		return nil, err
 	}
-	states, err := c.codespaces.States(c.settings)
+	states, err := c.codespaces.States(ctx, c.settings)
 	if err != nil {
 		return nil, err
 	}
-	trees, err := All(c.runner, c.settings.Cwd, c.settings.Branch())
+	trees, err := All(ctx, c.Runner, c.settings.Cwd, c.settings.Branch())
 	if err != nil {
 		return nil, err
 	}
 	rows := []map[string]string{}
 	for _, tree := range trees {
-		name, state := tree.Codespace(), ""
+		name, state := tree.Codespace(ctx), ""
 		if name != "" {
 			if state = states[name]; state == "" {
 				state = "Deleted"
 			}
 		}
 		rows = append(rows, map[string]string{"worktree": tree.Path, "branch": tree.Branch,
-			"base": c.settings.Branch(), "codespace": name, "state": state, "phase": tree.Phase()})
+			"base": c.settings.Branch(), "codespace": name, "state": state, "phase": tree.Phase(ctx)})
 	}
 	return rows, nil
 }
@@ -373,9 +406,9 @@ func (c *Commands) printJSON(rows []map[string]string, opts StatusOptions) error
 	}
 	switch {
 	case opts.JQ != "":
-		return jq.Evaluate(bytes.NewReader(data), c.io.Out, opts.JQ)
+		return jq.Evaluate(bytes.NewReader(data), c.IO.Out, opts.JQ)
 	case opts.Template != "":
-		t := template.New(c.io.Out, c.io.Width, c.io.TTY)
+		t := template.New(c.IO.Out, c.IO.Width, c.IO.Color)
 		if err := t.Parse(opts.Template); err != nil {
 			return err
 		}
@@ -384,16 +417,20 @@ func (c *Commands) printJSON(rows []map[string]string, opts StatusOptions) error
 		}
 		return t.Flush()
 	default:
-		return jsonpretty.Format(c.io.Out, bytes.NewReader(data), "  ", c.io.TTY)
+		return jsonpretty.Format(c.IO.Out, bytes.NewReader(data), "  ", c.IO.Color)
 	}
 }
 
-func (c *Commands) sync(tree *Worktree, name string) (*Remote, error) {
-	remote := NewRemote(c.runner, name, c.settings)
-	err := (&Sync{c.runner, remote, c.settings.Takeover(), c.io.Err}).Call(tree)
+func (c *Commands) remote(name string) *Remote {
+	return NewRemote(c.Runner, c.GH, name, c.settings, c.IO.StdinTTY)
+}
+
+func (c *Commands) sync(ctx context.Context, tree *Worktree, name string) (*Remote, error) {
+	remote := c.remote(name)
+	err := (&Sync{remote, c.settings.Takeover(), c.IO.Err}).Call(ctx, tree)
 	return remote, err
 }
 
 func (c *Commands) log(format string, args ...any) {
-	fmt.Fprintf(c.io.Err, "gh csd: "+format+"\n", args...)
+	fmt.Fprintf(c.IO.Err, "gh csd: "+format+"\n", args...)
 }

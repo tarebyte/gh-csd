@@ -1,6 +1,7 @@
 package csd
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -18,26 +19,27 @@ const (
 
 // Sync makes a codespace's checkout match a worktree's changes.
 type Sync struct {
-	runner   Runner
 	remote   *Remote
 	takeover bool
 	log      io.Writer
 }
 
-func (s *Sync) Call(tree *Worktree) error {
-	if err := s.claim(tree); err != nil {
+// Call copies tree's change set to the codespace, deletes what was deleted
+// locally, and resets what is no longer changed.
+func (s *Sync) Call(ctx context.Context, tree *Worktree) error {
+	if err := s.claim(ctx, tree); err != nil {
 		return err
 	}
-	changed, err := tree.ChangedPaths()
+	changed, err := tree.ChangedPaths(ctx)
 	if err != nil {
 		return err
 	}
-	dirty, err := s.remoteDirty()
+	dirty, err := s.remoteDirty(ctx)
 	if err != nil {
 		return err
 	}
 	set := NewChangeSet(changed, tree.Existing(changed), dirty)
-	if err := s.apply(set, tree.Path); err != nil {
+	if err := s.apply(ctx, set, tree.Path); err != nil {
 		return err
 	}
 	fmt.Fprintf(s.log, "gh csd: copied %d, deleted %d, reset %d\n", len(set.Sync), len(set.Gone), len(set.Reset))
@@ -47,47 +49,53 @@ func (s *Sync) Call(tree *Worktree) error {
 // claim keeps one codespace to one worktree: the reset step would undo
 // another worktree's synced files. The binding is saved only once the
 // claim succeeds.
-func (s *Sync) claim(tree *Worktree) error {
-	host, _ := os.Hostname()
-	me := strings.SplitN(host, ".", 2)[0] + ":" + tree.Path
-	owner, err := s.remote.Capture("cat "+s.ownerFile()+" 2>/dev/null", "")
+func (s *Sync) claim(ctx context.Context, tree *Worktree) error {
+	me := shortHostname() + ":" + tree.Path
+	owner, err := s.remote.Capture(ctx, "cat "+s.ownerFile()+" 2>/dev/null", "")
 	if err != nil {
 		return err
 	}
 	if o := strings.TrimSpace(owner.Out); o != "" && o != me && !s.takeover {
 		return fmt.Errorf("%s is in use by %s; use another codespace, or pass --takeover", s.remote.Codespace, o)
 	}
-	res, err := s.remote.Capture("echo "+ShellEscape(me)+" > "+s.ownerFile(), "")
+	res, err := s.remote.Capture(ctx, "echo "+ShellEscape(me)+" > "+s.ownerFile(), "")
 	if err := check(res, err, "claim"); err != nil {
 		return err
 	}
-	return tree.Bind(s.remote.Codespace)
+	return tree.Bind(ctx, s.remote.Codespace)
 }
 
-func (s *Sync) remoteDirty() ([]string, error) {
-	res, err := s.remote.Capture("cd "+ShellEscape(s.remote.Dir)+" && git status --porcelain -z --no-renames --untracked-files=all", "")
+// shortHostname matches `hostname -s`, which the Ruby version wrote.
+func shortHostname() string {
+	host, _ := os.Hostname()
+	short, _, _ := strings.Cut(host, ".")
+	return short
+}
+
+func (s *Sync) remoteDirty(ctx context.Context) ([]string, error) {
+	res, err := s.remote.Capture(ctx, "cd "+ShellEscape(s.remote.Dir)+" && git status --porcelain -z --no-renames --untracked-files=all", "")
 	if err := check(res, err, "git status"); err != nil {
 		return nil, err
 	}
 	return ParsePorcelain(res.Out), nil
 }
 
-func (s *Sync) apply(set ChangeSet, fromDir string) error {
-	res, err := s.remote.Copy(set.Sync, fromDir)
+func (s *Sync) apply(ctx context.Context, set ChangeSet, fromDir string) error {
+	res, err := s.remote.Copy(ctx, set.Sync, fromDir)
 	if err := check(res, err, "rsync"); err != nil {
 		return err
 	}
-	if err := s.pipePaths("xargs -0 rm -f --", set.Gone, "delete"); err != nil {
+	if err := s.pipePaths(ctx, "xargs -0 rm -f --", set.Gone, "delete"); err != nil {
 		return err
 	}
-	return s.pipePaths(resetScript, set.Reset, "reset")
+	return s.pipePaths(ctx, resetScript, set.Reset, "reset")
 }
 
-func (s *Sync) pipePaths(script string, paths []string, step string) error {
+func (s *Sync) pipePaths(ctx context.Context, script string, paths []string, step string) error {
 	if len(paths) == 0 {
 		return nil
 	}
-	res, err := s.remote.Capture("cd "+ShellEscape(s.remote.Dir)+" && "+script, strings.Join(paths, "\x00")+"\x00")
+	res, err := s.remote.Capture(ctx, "cd "+ShellEscape(s.remote.Dir)+" && "+script, strings.Join(paths, "\x00")+"\x00")
 	return check(res, err, step)
 }
 
