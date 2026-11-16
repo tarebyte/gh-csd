@@ -263,11 +263,14 @@ func (w *Worktree) ChangedPaths(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	untracked, err := gitRaw(ctx, w.runner, w.Path, "ls-files", "-z", "--others", "--exclude-standard")
+	// status, unlike ls-files --others, reads the untracked cache, which cuts
+	// seconds in a large repo; with -uall it needs showUntrackedFiles=all.
+	status, err := gitRaw(ctx, w.runner, w.Path, "-c", "core.untrackedCache=true", "-c", "status.showUntrackedFiles=all",
+		"status", "--porcelain", "-z", "--no-renames", "--untracked-files=all")
 	if err != nil {
 		return nil, err
 	}
-	return uniq(append(SplitZ(diff), SplitZ(untracked)...)), nil
+	return uniq(append(SplitZ(diff), ParseUntracked(status)...)), nil
 }
 
 // Existing keeps the paths that exist in the worktree.

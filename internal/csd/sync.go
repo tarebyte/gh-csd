@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -30,12 +32,13 @@ func (s *Sync) Call(ctx context.Context, tree *Worktree) error {
 	if err := s.claim(ctx, tree); err != nil {
 		return err
 	}
-	changed, err := tree.ChangedPaths(ctx)
-	if err != nil {
-		return err
-	}
-	dirty, err := s.remoteDirty(ctx)
-	if err != nil {
+	// The local and remote listings are independent, so the faster one hides
+	// behind the slower.
+	var changed, dirty []string
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() (err error) { changed, err = tree.ChangedPaths(gctx); return err })
+	g.Go(func() (err error) { dirty, err = s.remoteDirty(gctx); return err })
+	if err := g.Wait(); err != nil {
 		return err
 	}
 	set := NewChangeSet(changed, tree.Existing(changed), dirty)

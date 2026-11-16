@@ -47,6 +47,17 @@ func ParsePorcelain(text string) []string {
 	return uniq(paths)
 }
 
+// ParseUntracked keeps the untracked (??) paths of `git status --porcelain -z`.
+func ParseUntracked(text string) []string {
+	var paths []string
+	for _, entry := range SplitZ(text) {
+		if strings.HasPrefix(entry, "?? ") {
+			paths = append(paths, entry[3:])
+		}
+	}
+	return paths
+}
+
 func uniq(items []string) []string {
 	seen := map[string]bool{}
 	var out []string

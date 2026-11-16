@@ -153,10 +153,19 @@ func TestChangedPathsListsDiffsUntrackedAndDeletedPaths(t *testing.T) {
 	write(t, w.Path+"/kept.rb", "2")
 	must(t, os.Remove(w.Path+"/doomed.rb"))
 	write(t, w.Path+"/new file.rb", "3")
+	write(t, w.Path+"/.gitignore", "*.log\n")
+	write(t, w.Path+"/skip.log", "4")
 	changed, err := w.ChangedPaths(bg)
 	must(t, err)
-	equalSlice(t, []string{"doomed.rb", "kept.rb", "new file.rb"}, sorted(changed))
-	equalSlice(t, []string{"kept.rb", "new file.rb"}, sorted(w.Existing(changed)))
+	equalSlice(t, []string{".gitignore", "doomed.rb", "kept.rb", "new file.rb"}, sorted(changed))
+	equalSlice(t, []string{".gitignore", "kept.rb", "new file.rb"}, sorted(w.Existing(changed)))
+
+	// The untracked cache, now in the index, still sees files in new folders.
+	must(t, os.MkdirAll(w.Path+"/lib/deep", 0o755))
+	write(t, w.Path+"/lib/deep/later.rb", "5")
+	changed, err = w.ChangedPaths(bg)
+	must(t, err)
+	equalSlice(t, []string{".gitignore", "doomed.rb", "kept.rb", "lib/deep/later.rb", "new file.rb"}, sorted(changed))
 }
 
 // --- up ---
