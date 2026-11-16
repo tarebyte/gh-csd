@@ -14,9 +14,12 @@ read -ra sizes <<<"${SIZES:-0 1 10 100 1000}"
 reps=${REPS:-5}
 read -ra csd <<<"${CSD:-gh csd}"
 bench=.csd-bench
-scratch=/tmp/csd-bench-mutagen
+# Names unique to this run, so cleanup never touches another run's session.
+session=csd-bench-$$
+scratch=/tmp/csd-bench-$$
 cs=$(cat "$(git rev-parse --git-dir)/cs-dev-codespace")
 dir=${CSD_DIR:-/workspaces/$(basename -s .git "$(git remote get-url origin)")}
+qdir=$(printf %q "$dir")
 
 tmp=$(mktemp -d)
 gh codespace ssh --config -c "$cs" >"$tmp/config"
@@ -25,13 +28,18 @@ host=$(awk '/^Host /{print $2; exit}' "$tmp/config")
 opts=(-F "$tmp/config" -o IdentityAgent=none -o ControlMaster=auto
   -o "ControlPath=$HOME/.ssh/gh-csd-%C" -o ControlPersist=15m)
 
+# cleanup removes only what this run made. It deletes the bench dir in the
+# codespace directly: a full sync would also reset unrelated codespace edits.
+synced='' mutagen_started=''
 cleanup() {
-  if command -v mutagen >/dev/null; then
-    mutagen sync terminate csd-bench >/dev/null 2>&1 || true
+  if [ -n "$mutagen_started" ]; then
+    mutagen sync terminate "$session" >/dev/null 2>&1 || true
     ssh "${opts[@]}" "$host" "rm -rf $scratch" || true
   fi
   rm -rf "$bench"
-  "${csd[@]}" run >/dev/null 2>&1 || true # resets the bench files in the codespace
+  if [ -n "$synced" ]; then
+    ssh "${opts[@]}" "$host" "rm -rf $qdir/$bench" || true
+  fi
   rm -rf "$tmp"
 }
 trap cleanup EXIT
@@ -68,7 +76,8 @@ measure() {
 printf '%-14s %6s %8s %8s %8s\n' arm files median min max
 measure ssh-roundtrip 0 ssh "${opts[@]}" "$host" true
 measure remote-status 0 ssh "${opts[@]}" "$host" \
-  "cd $dir && git status --porcelain -z --no-renames --untracked-files=all"
+  "cd $qdir && git status --porcelain -z --no-renames --untracked-files=all"
+synced=1
 for n in "${sizes[@]}"; do measure rsync "$n" "${csd[@]}" run; done
 
 if [ "${MUTAGEN:-1}" = 0 ] || ! command -v mutagen >/dev/null; then
@@ -85,9 +94,10 @@ done
 export MUTAGEN_SSH_PATH=$tmp/bin
 
 rm -rf "$bench"
+mutagen_started=1
 t0=$(now)
-mutagen sync create --name csd-bench --mode one-way-replica --ignore-vcs . "$host:$scratch" >/dev/null
-mutagen sync flush csd-bench >/dev/null
+mutagen sync create --name "$session" --mode one-way-replica --ignore-vcs . "$host:$scratch" >/dev/null
+mutagen sync flush "$session" >/dev/null
 t1=$(now)
 printf '%-14s %6s %8.3f\n' mutagen-initial all "$(awk "BEGIN{print $t1 - $t0}")"
-for n in "${sizes[@]}"; do measure mutagen "$n" mutagen sync flush csd-bench; done
+for n in "${sizes[@]}"; do measure mutagen "$n" mutagen sync flush "$session"; done
