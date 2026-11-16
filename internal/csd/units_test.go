@@ -47,6 +47,11 @@ func TestSplitZAndParsePorcelain(t *testing.T) {
 		ParsePorcelain(" M app/models/user.rb\x00?? new file.rb\x00 D old.rb\x00"))
 }
 
+func TestParseUntrackedKeepsOnlyUntrackedPaths(t *testing.T) {
+	equalSlice(t, []string{"new file.rb", "dir/b.rb"},
+		ParseUntracked(" M app/models/user.rb\x00?? new file.rb\x00 D old.rb\x00?? dir/b.rb\x00"))
+}
+
 // --- Config ---
 
 func TestConfigPath(t *testing.T) {

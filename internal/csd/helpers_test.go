@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ var bg = context.Background()
 // replies with scripted results. Unscripted commands succeed with empty
 // output, except passthrough programs (git), which run for real.
 type fakeRunner struct {
+	mu      sync.Mutex // sync lists local and remote paths at once
 	calls   [][]string
 	stdins  []string
 	replies []reply
@@ -66,6 +68,8 @@ func (f *fakeRunner) onStartError(err error, prefix ...string) *fakeRunner {
 }
 
 func (f *fakeRunner) Capture(ctx context.Context, cmd []string, stdin string) (Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, cmd)
 	f.stdins = append(f.stdins, stdin)
 	if f.pass[cmd[0]] {
@@ -75,6 +79,8 @@ func (f *fakeRunner) Capture(ctx context.Context, cmd []string, stdin string) (R
 }
 
 func (f *fakeRunner) Run(_ context.Context, cmd []string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, cmd)
 	f.stdins = append(f.stdins, "")
 	res, err := f.replyFor(cmd)
