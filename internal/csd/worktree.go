@@ -41,7 +41,7 @@ func ForBranch(ctx context.Context, r Runner, branch, cwd, base, dir string) (*W
 	path := filepath.Join(dir, strings.ReplaceAll(branch, "/", "-"))
 	// Another clone of the repo picks the same path; never take over its folder.
 	if _, err := os.Stat(path); err == nil {
-		return nil, fmt.Errorf("%s exists but is not this checkout's worktree for %s; move or remove it", path, branch)
+		return nil, notOurs(path, branch)
 	}
 	return &Worktree{r, path, base, branch, main}, nil
 }
@@ -143,6 +143,10 @@ func gitRaw(ctx context.Context, r Runner, dir string, args ...string) (string, 
 	return res.Out, nil
 }
 
+func notOurs(path, branch string) error {
+	return fmt.Errorf("%s exists but is not this checkout's worktree for %s; move or remove it", path, branch)
+}
+
 // Exist reports whether the worktree's folder exists.
 func (w *Worktree) Exist() bool {
 	info, err := os.Stat(w.Path)
@@ -155,7 +159,17 @@ func (w *Worktree) Create(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	if w.Exist() {
-		return false, nil
+		// Look again: another clone may have made the folder since ForBranch.
+		_, linked, err := worktreeList(ctx, w.runner, w.Main)
+		if err != nil {
+			return false, err
+		}
+		for _, l := range linked {
+			if l == [2]string{w.Path, w.Branch} {
+				return false, nil
+			}
+		}
+		return false, notOurs(w.Path, w.Branch)
 	}
 	res, err := w.runner.Capture(ctx, []string{"git", "-C", w.Main, "show-ref", "-q", "--verify", "refs/heads/" + w.Branch}, "")
 	if err != nil {

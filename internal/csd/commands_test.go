@@ -106,6 +106,16 @@ func TestRefusesAFolderAnotherCloneMadeAtThePath(t *testing.T) {
 	}
 }
 
+func TestCreateRefusesAFolderMadeAfterForBranchLooked(t *testing.T) {
+	e := newEnv(t)
+	w := e.tree("me/feature")
+	must(t, os.MkdirAll(w.Path, 0o755))
+	_, err := w.Create(bg)
+	if err == nil || !strings.Contains(err.Error(), "is not this checkout's worktree") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestCreateRecordsTheResolvedPathThroughASymlink(t *testing.T) {
 	e := newEnv(t)
 	must(t, os.MkdirAll(e.root+"/real", 0o755))
