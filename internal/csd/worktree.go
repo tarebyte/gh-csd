@@ -33,11 +33,15 @@ func ForBranch(ctx context.Context, r Runner, branch, cwd, base, dir string) (*W
 	if err != nil {
 		return nil, err
 	}
-	path := filepath.Join(dir, strings.ReplaceAll(branch, "/", "-"))
 	for _, l := range linked {
 		if l[1] == branch {
-			path = l[0]
+			return &Worktree{r, l[0], base, branch, main}, nil
 		}
+	}
+	path := filepath.Join(dir, strings.ReplaceAll(branch, "/", "-"))
+	// Another clone of the repo picks the same path; never take over its folder.
+	if _, err := os.Stat(path); err == nil {
+		return nil, fmt.Errorf("%s exists but is not this checkout's worktree for %s; move or remove it", path, branch)
 	}
 	return &Worktree{r, path, base, branch, main}, nil
 }
@@ -161,8 +165,16 @@ func (w *Worktree) Create(ctx context.Context) (bool, error) {
 	if res.OK() {
 		args = []string{"worktree", "add", "-q", w.Path, w.Branch}
 	}
-	_, err = git(ctx, w.runner, w.Main, args...)
-	return err == nil, err
+	if _, err := git(ctx, w.runner, w.Main, args...); err != nil {
+		return false, err
+	}
+	// git records the resolved path; match it so the owner check agrees later.
+	path, err := filepath.EvalSymlinks(w.Path)
+	if err != nil {
+		return false, err
+	}
+	w.Path = filepath.ToSlash(path)
+	return true, nil
 }
 
 // Codespace is the bound codespace's name, or "" when none is bound. Any

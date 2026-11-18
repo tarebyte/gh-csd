@@ -97,6 +97,29 @@ func TestReusesAWorktreeAnotherToolMadeForTheBranch(t *testing.T) {
 	equal(t, false, exists(elsewhere))
 }
 
+func TestRefusesAFolderAnotherCloneMadeAtThePath(t *testing.T) {
+	e := newEnv(t)
+	must(t, os.MkdirAll(e.dir()+"/me-feature", 0o755))
+	_, err := ForBranch(bg, ExecRunner{}, "me/feature", e.main, "master", e.dir())
+	if err == nil || !strings.Contains(err.Error(), "is not this checkout's worktree") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestCreateRecordsTheResolvedPathThroughASymlink(t *testing.T) {
+	e := newEnv(t)
+	must(t, os.MkdirAll(e.root+"/real", 0o755))
+	must(t, os.Symlink(e.root+"/real", e.root+"/link"))
+	w, err := ForBranch(bg, ExecRunner{}, "me/feature", e.main, "master", e.root+"/link")
+	must(t, err)
+	created, err := w.Create(bg)
+	must(t, err)
+	equal(t, true, created)
+	equal(t, e.root+"/real/me-feature", w.Path)
+	again := e.tree("me/feature")
+	equal(t, w.Path, again.Path)
+}
+
 func TestNeverPicksTheMainCheckout(t *testing.T) {
 	e := newEnv(t)
 	equal(t, e.dir()+"/master", e.tree("master").Path)
