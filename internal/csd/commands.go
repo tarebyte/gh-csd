@@ -225,9 +225,9 @@ func (c *Commands) worktree(ctx context.Context, branch string) (*Worktree, erro
 		return nil, err
 	}
 	if branch == "" {
-		return Here(ctx, c.Runner, c.settings.Cwd, c.settings.Branch())
+		return Here(ctx, c.Runner, c.settings.Cwd, c.settings.Branch(), c.settings.WorktreeDir())
 	}
-	return ForBranch(ctx, c.Runner, branch, c.settings.Cwd, c.settings.Branch())
+	return ForBranch(ctx, c.Runner, branch, c.settings.Cwd, c.settings.Branch(), c.settings.WorktreeDir())
 }
 
 func (c *Commands) downTarget(ctx context.Context, branch string) (*Worktree, error) {

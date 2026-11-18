@@ -126,6 +126,13 @@ func TestBuiltInDefaults(t *testing.T) {
 	equal(t, false, s.DefaultPermissions())
 }
 
+func TestWorktreeDirFollowsXDGDataHome(t *testing.T) {
+	equal(t, "/Users/me/.local/share/gh-csd/worktrees/me/my-app",
+		testSettings(map[string]string{"HOME": "/Users/me"}, "/", nil, nil).WorktreeDir())
+	equal(t, "/data/gh-csd/worktrees/me/my-app",
+		testSettings(map[string]string{"HOME": "/Users/me", "XDG_DATA_HOME": "/data"}, "/", nil, nil).WorktreeDir())
+}
+
 func TestFlagBeatsConfigBeatsDefault(t *testing.T) {
 	config := map[string]string{"machine": "from-config"}
 	equal(t, "flag", testSettings(nil, "/", config, map[string]string{"machine": "flag"}).Machine())

@@ -17,8 +17,10 @@ func newUpCmd() *cobra.Command {
 		Long: `Create or reuse a codespace for a worktree, then sync the worktree to it.
 
 With no branch, up uses the worktree you are in. With a branch, up uses that
-branch's worktree, or creates one next to the main checkout. The codespace
-checks out the base branch; run copies your changes onto it.`,
+branch's worktree, or creates one in
+~/.local/share/gh-csd/worktrees/<owner>/<repo>/<branch> ($XDG_DATA_HOME
+replaces ~/.local/share when set). The codespace checks out the base
+branch; run copies your changes onto it.`,
 		Example: "  $ gh csd up\n  $ gh csd up me/fix-login -m standardLinux32gb",
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

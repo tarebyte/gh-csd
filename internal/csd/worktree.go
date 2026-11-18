@@ -26,24 +26,28 @@ type Worktree struct {
 }
 
 // ForBranch is branch's worktree: the one git already has, wherever
-// another tool made it; else next to the main checkout, with slashes in
-// the branch name turned into dashes (my-app -> my-app-me-feature).
-func ForBranch(ctx context.Context, r Runner, branch, cwd, base string) (*Worktree, error) {
+// another tool made it; else in dir, with slashes in the branch name
+// turned into dashes (me/feature -> dir/me-feature).
+func ForBranch(ctx context.Context, r Runner, branch, cwd, base, dir string) (*Worktree, error) {
 	main, linked, err := worktreeList(ctx, r, cwd)
 	if err != nil {
 		return nil, err
 	}
-	path := main + "-" + strings.ReplaceAll(branch, "/", "-")
 	for _, l := range linked {
 		if l[1] == branch {
-			path = l[0]
+			return &Worktree{r, l[0], base, branch, main}, nil
 		}
+	}
+	path := filepath.Join(dir, strings.ReplaceAll(branch, "/", "-"))
+	// Another clone of the repo picks the same path; never take over its folder.
+	if _, err := os.Stat(path); err == nil {
+		return nil, notOurs(path, branch)
 	}
 	return &Worktree{r, path, base, branch, main}, nil
 }
 
 // Here is the linked worktree at cwd, for up and down without a branch.
-func Here(ctx context.Context, r Runner, cwd, base string) (*Worktree, error) {
+func Here(ctx context.Context, r Runner, cwd, base, dir string) (*Worktree, error) {
 	top, err := git(ctx, r, cwd, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return nil, err
@@ -55,7 +59,7 @@ func Here(ctx context.Context, r Runner, cwd, base string) (*Worktree, error) {
 	if branch == "" {
 		return nil, fmt.Errorf("%s has no branch checked out; pass a branch", top)
 	}
-	tree, err := ForBranch(ctx, r, branch, cwd, base)
+	tree, err := ForBranch(ctx, r, branch, cwd, base, dir)
 	if err != nil {
 		return nil, err
 	}
@@ -139,6 +143,10 @@ func gitRaw(ctx context.Context, r Runner, dir string, args ...string) (string, 
 	return res.Out, nil
 }
 
+func notOurs(path, branch string) error {
+	return fmt.Errorf("%s exists but is not this checkout's worktree for %s; move or remove it", path, branch)
+}
+
 // Exist reports whether the worktree's folder exists.
 func (w *Worktree) Exist() bool {
 	info, err := os.Stat(w.Path)
@@ -151,7 +159,17 @@ func (w *Worktree) Create(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	if w.Exist() {
-		return false, nil
+		// Look again: another clone may have made the folder since ForBranch.
+		_, linked, err := worktreeList(ctx, w.runner, w.Main)
+		if err != nil {
+			return false, err
+		}
+		for _, l := range linked {
+			if l == [2]string{w.Path, w.Branch} {
+				return false, nil
+			}
+		}
+		return false, notOurs(w.Path, w.Branch)
 	}
 	res, err := w.runner.Capture(ctx, []string{"git", "-C", w.Main, "show-ref", "-q", "--verify", "refs/heads/" + w.Branch}, "")
 	if err != nil {
@@ -161,8 +179,16 @@ func (w *Worktree) Create(ctx context.Context) (bool, error) {
 	if res.OK() {
 		args = []string{"worktree", "add", "-q", w.Path, w.Branch}
 	}
-	_, err = git(ctx, w.runner, w.Main, args...)
-	return err == nil, err
+	if _, err := git(ctx, w.runner, w.Main, args...); err != nil {
+		return false, err
+	}
+	// git records the resolved path; match it so the owner check agrees later.
+	path, err := filepath.EvalSymlinks(w.Path)
+	if err != nil {
+		return false, err
+	}
+	w.Path = filepath.ToSlash(path)
+	return true, nil
 }
 
 // Codespace is the bound codespace's name, or "" when none is bound. Any
