@@ -35,7 +35,7 @@ func (e *env) commands(cwd string, config, flags map[string]string) *Commands {
 	for k, v := range config {
 		cfg[k] = v
 	}
-	s := testSettings(map[string]string{"HOME": "/Users/me"}, cwd, cfg, flags)
+	s := testSettings(map[string]string{"HOME": "/Users/me", "XDG_DATA_HOME": e.root + "/data"}, cwd, cfg, flags)
 	s.CacheDir = e.root + "/cache"
 	return NewCommands(s, Deps{Runner: e.fake, API: e.api, GH: "gh", Clock: e.clock, Prompt: e.prompt,
 		IO:   IO{Out: &e.out, Err: &e.err, Width: 80, StdinTTY: true},
@@ -45,10 +45,13 @@ func (e *env) commands(cwd string, config, flags map[string]string) *Commands {
 func (e *env) at(cwd string) *Commands { return e.commands(cwd, nil, nil) }
 
 func (e *env) tree(branch string) *Worktree {
-	w, err := ForBranch(bg, ExecRunner{}, branch, e.main, "master")
+	w, err := ForBranch(bg, ExecRunner{}, branch, e.main, "master", e.dir())
 	must(e.t, err)
 	return w
 }
+
+// dir is where new worktrees go, as WorktreeDir puts them for e.commands.
+func (e *env) dir() string { return e.root + "/data/gh-csd/worktrees/me/my-app" }
 
 func (e *env) created(branch string) *Worktree {
 	w := e.tree(branch)
@@ -70,15 +73,15 @@ func exists(path string) bool {
 
 // --- worktree ---
 
-func TestPathSitsNextToTheMainCheckoutWithDashesForSlashes(t *testing.T) {
+func TestPathIsInTheWorktreeDirWithDashesForSlashes(t *testing.T) {
 	e := newEnv(t)
 	w := e.tree("me/feature")
-	equal(t, e.root+"/my-app-me-feature", w.Path)
+	equal(t, e.dir()+"/me-feature", w.Path)
 	equal(t, e.main, w.Main)
 	first := e.created("me/one")
-	w, err := ForBranch(bg, ExecRunner{}, "me/two", first.Path, "master")
+	w, err := ForBranch(bg, ExecRunner{}, "me/two", first.Path, "master", e.dir())
 	must(t, err)
-	equal(t, e.root+"/my-app-me-two", w.Path)
+	equal(t, e.dir()+"/me-two", w.Path)
 }
 
 func TestReusesAWorktreeAnotherToolMadeForTheBranch(t *testing.T) {
@@ -96,7 +99,7 @@ func TestReusesAWorktreeAnotherToolMadeForTheBranch(t *testing.T) {
 
 func TestNeverPicksTheMainCheckout(t *testing.T) {
 	e := newEnv(t)
-	equal(t, e.root+"/my-app-master", e.tree("master").Path)
+	equal(t, e.dir()+"/master", e.tree("master").Path)
 }
 
 func TestCreateBranchesFromTheBaseOrChecksOutAnExistingBranch(t *testing.T) {
@@ -121,7 +124,7 @@ func TestBindingLivesInTheWorktreesOwnGitDir(t *testing.T) {
 	cur, err := Current(bg, ExecRunner{}, two.Path, "master")
 	must(t, err)
 	equal(t, "cs-two", bound(t, cur))
-	equal(t, true, exists(e.main+"/.git/worktrees/my-app-me-one/"+BindingFile))
+	equal(t, true, exists(e.main+"/.git/worktrees/me-one/"+BindingFile))
 }
 
 func TestUnsavedWorkListsUncommittedAndUnpushedWork(t *testing.T) {
@@ -453,7 +456,7 @@ func TestStatusListsEachWorktreeWithItsCodespaceAndState(t *testing.T) {
 	e.created("me/two")
 	e.api.on("GET", "repos/me/my-app/codespaces", 200, `{"codespaces":[{"name":"cs-one","state":"Available"}]}`)
 	must(t, e.at(e.main).Status(bg, StatusOptions{}))
-	equal(t, "me/one\tcs-one\tAvailable\t\t"+one.Path+"\nme/two\t\t\t\t"+e.main+"-me-two\n", e.out.String())
+	equal(t, "me/one\tcs-one\tAvailable\t\t"+one.Path+"\nme/two\t\t\t\t"+e.dir()+"/me-two\n", e.out.String())
 }
 
 func TestStatusSkipsAPrunableWorktree(t *testing.T) {

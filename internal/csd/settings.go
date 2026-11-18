@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/cli/go-gh/v2/pkg/repository"
@@ -23,7 +24,7 @@ import (
 //	ready_check                                   none: no services wait
 //
 // Flags only: codespace (-c, for run) and takeover. The environment locates
-// files (GH_CSD_CONFIG, XDG_CONFIG_HOME, HOME) and can name the repo
+// files (GH_CSD_CONFIG, XDG_CONFIG_HOME, XDG_DATA_HOME, HOME) and can name the repo
 // (GH_REPO), as for gh.
 type Settings struct {
 	Env    map[string]string
@@ -37,7 +38,7 @@ type Settings struct {
 }
 
 // EnvKeys are the environment variables Settings reads.
-var EnvKeys = []string{"GH_CSD_CONFIG", "GH_REPO", "XDG_CONFIG_HOME", "HOME"}
+var EnvKeys = []string{"GH_CSD_CONFIG", "GH_REPO", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "HOME"}
 
 var defaults = map[string]string{
 	"devcontainer":        ".devcontainer/devcontainer.json",
@@ -122,6 +123,16 @@ func (s *Settings) RemoteDir() string {
 		return dir
 	}
 	return "/workspaces/" + path.Base(s.repo)
+}
+
+// WorktreeDir holds new worktrees, as gh keeps its data:
+// $XDG_DATA_HOME/gh-csd/worktrees/<owner>/<repo>, else under ~/.local/share.
+func (s *Settings) WorktreeDir() string {
+	base := s.Env["XDG_DATA_HOME"]
+	if base == "" {
+		base = filepath.Join(s.Env["HOME"], ".local", "share")
+	}
+	return filepath.Join(base, "gh-csd", "worktrees", s.repo)
 }
 
 // Branch is the base: the codespace's checkout, and where new worktrees

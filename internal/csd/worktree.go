@@ -26,14 +26,14 @@ type Worktree struct {
 }
 
 // ForBranch is branch's worktree: the one git already has, wherever
-// another tool made it; else next to the main checkout, with slashes in
-// the branch name turned into dashes (my-app -> my-app-me-feature).
-func ForBranch(ctx context.Context, r Runner, branch, cwd, base string) (*Worktree, error) {
+// another tool made it; else in dir, with slashes in the branch name
+// turned into dashes (me/feature -> dir/me-feature).
+func ForBranch(ctx context.Context, r Runner, branch, cwd, base, dir string) (*Worktree, error) {
 	main, linked, err := worktreeList(ctx, r, cwd)
 	if err != nil {
 		return nil, err
 	}
-	path := main + "-" + strings.ReplaceAll(branch, "/", "-")
+	path := filepath.Join(dir, strings.ReplaceAll(branch, "/", "-"))
 	for _, l := range linked {
 		if l[1] == branch {
 			path = l[0]
@@ -43,7 +43,7 @@ func ForBranch(ctx context.Context, r Runner, branch, cwd, base string) (*Worktr
 }
 
 // Here is the linked worktree at cwd, for up and down without a branch.
-func Here(ctx context.Context, r Runner, cwd, base string) (*Worktree, error) {
+func Here(ctx context.Context, r Runner, cwd, base, dir string) (*Worktree, error) {
 	top, err := git(ctx, r, cwd, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return nil, err
@@ -55,7 +55,7 @@ func Here(ctx context.Context, r Runner, cwd, base string) (*Worktree, error) {
 	if branch == "" {
 		return nil, fmt.Errorf("%s has no branch checked out; pass a branch", top)
 	}
-	tree, err := ForBranch(ctx, r, branch, cwd, base)
+	tree, err := ForBranch(ctx, r, branch, cwd, base, dir)
 	if err != nil {
 		return nil, err
 	}

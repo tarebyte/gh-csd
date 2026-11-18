@@ -22,7 +22,7 @@ gh csd up <branch>   # that branch's worktree, made if needed
 ```
 
 - With no branch, `up` uses the current worktree. It fails in the main checkout.
-- With a branch, it reuses the branch's existing worktree, wherever it is. Otherwise it creates `<main-checkout>-<branch>` (slashes become `-`), branched from the base branch (the `branch` setting, origin's default by default).
+- With a branch, it reuses the branch's existing worktree, wherever it is. Otherwise it creates `~/.local/share/gh-csd/worktrees/<owner>/<repo>/<branch>` (slashes become `-`; `$XDG_DATA_HOME` replaces `~/.local/share` when set), branched from the base branch (the `branch` setting, origin's default by default).
 - Creates or reuses the worktree's codespace, then does a first sync. The codespace checks out the base branch, not yours; `run` copies your changes onto it.
 - Prints `gh csd: ready  worktree=<path>  codespace=<name>`. Tell the user both values.
 - A new codespace takes several minutes. Run `up` in the background and wait for it to finish.

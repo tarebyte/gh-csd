@@ -2,7 +2,7 @@
 
 Edit a GitHub repo in a local worktree, and run it in that worktree's own codespace.
 
-- `gh csd up` makes a codespace for the worktree you are in. `gh csd up <branch>` uses that branch's worktree, or makes one next to your main checkout (`~/src/my-app` → `~/src/my-app-<branch>`).
+- `gh csd up` makes a codespace for the worktree you are in. `gh csd up <branch>` uses that branch's worktree, or makes one in `~/.local/share/gh-csd/worktrees/<owner>/<repo>/<branch>` (`$XDG_DATA_HOME` replaces `~/.local/share` when set).
 - `gh csd run <command>` copies the worktree's changes to the codespace with rsync, then runs the command there over SSH.
 - `gh csd status` lists each worktree and its codespace. Add `--json <fields>`, with `--jq` or `--template`, for scripts, as in `gh`.
 - `gh csd down` deletes the codespace, the worktree, and the branch.
@@ -48,7 +48,7 @@ Run these from inside your clone or one of its worktrees. A new codespace takes 
 
 ```sh
 gh csd up my-feature              # worktree + codespace, waits until both are ready
-cd ../my-app-my-feature
+cd ~/.local/share/gh-csd/worktrees/me/my-app/my-feature
 # ...edit files locally...
 gh csd run bin/test test/user_test.rb
 gh csd run                        # sync only
